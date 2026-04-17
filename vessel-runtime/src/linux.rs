@@ -342,12 +342,25 @@ fn send_signal(pid: u32, signal: i32) -> Result<(), VesselError> {
 
 fn wait_for_exit(pid: u32, timeout: Duration) -> Result<(), VesselError> {
     let proc_path = PathBuf::from(format!("/proc/{pid}"));
+    let stat_path = proc_path.join("stat");
     let deadline = Instant::now() + timeout;
 
     while Instant::now() < deadline {
         if !proc_path.exists() {
             return Ok(());
         }
+
+        // Also consider the process exited if it has become a zombie
+        if let Ok(stat) = fs::read_to_string(&stat_path) {
+            if let Some(rparen) = stat.rfind(')') {
+                let after_paren = &stat[rparen + 1..];
+                let parts: Vec<&str> = after_paren.split_whitespace().collect();
+                if parts.first() == Some(&"Z") || parts.first() == Some(&"X") {
+                    return Ok(());
+                }
+            }
+        }
+
         thread::sleep(Duration::from_millis(50));
     }
 
