@@ -1,9 +1,13 @@
 use std::{
     collections::BTreeMap,
     fs,
+    path::{Path, PathBuf},
+};
+
+#[cfg(unix)]
+use std::{
     io::{Read, Write},
     os::unix::net::UnixStream,
-    path::{Path, PathBuf},
 };
 
 use axum::{
