@@ -7,11 +7,12 @@ Unlike traditional container runtimes that rely on a persistent background servi
 ## 🚀 Key Features
 
 - **Daemonless Operation:** Zero resident memory footprint. When the container stops, the engine stops.
+- **Efficient Layered Storage:** Uses **Overlayfs** to combine immutable OCI layers with a per-container writable layer. Layers are cached by digest and shared across images to save disk space.
 - **Cross-Platform Native:**
-    - **Linux:** Uses native kernel namespaces (`unshare`) and `chroot` for rootless execution.
-    - **macOS:** Spawns lightweight microVMs using `libkrun` for native performance on Apple Silicon and Intel.
+    - **Linux:** Uses native kernel namespaces (`unshare`), `chroot`, and `mount` for rootless execution.
+    - **macOS:** Spawns lightweight microVMs using `libkrun` and `virtiofs` for native performance.
 - **OCI Compatible:** Pull, unpack, and execute standard images from any public registry (Docker Hub, GHCR, etc.).
-- **Runtime Flexibility:** Supports environment variable injection (`-e`) and host volume mounting (`-v`).
+- **Runtime Flexibility:** Supports environment variable injection (`-e`) and host volume mounting (`-v`) with automated guest-side setup.
 - **Resource Management:** Comprehensive suite of commands for container lifecycle (`run`, `start`, `stop`, `kill`, `rm`) and image management (`rmi`).
 - **Observability:** Integrated logging (`logs`) to inspect stdout/stderr from background containers.
 
