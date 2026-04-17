@@ -583,6 +583,7 @@ fn start_daemon(paths: &VesselPaths) -> Result<i32, VesselError> {
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_clone));
+    #[cfg(unix)]
     unsafe {
         child.pre_exec(|| {
             if libc::setsid() == -1 {
@@ -710,14 +711,22 @@ fn pid_exists(pid: i32) -> bool {
 }
 
 fn send_signal(pid: i32, signal: i32) -> Result<(), VesselError> {
-    let result = unsafe { libc::kill(pid, signal) };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(VesselError::Runtime(format!(
-            "failed to signal daemon pid {pid}: {}",
-            io::Error::last_os_error()
-        )))
+    #[cfg(unix)]
+    {
+        let result = unsafe { libc::kill(pid, signal) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(VesselError::Runtime(format!(
+                "failed to signal daemon pid {pid}: {}",
+                io::Error::last_os_error()
+            )))
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (pid, signal);
+        Err(VesselError::Runtime("not supported on non-unix".into()))
     }
 }
 
