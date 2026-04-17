@@ -171,4 +171,37 @@ mod tests {
         assert_eq!(loaded.status, ContainerStatus::Created);
         assert_eq!(loaded.command, vec!["/bin/echo".to_string(), "hello".to_string()]);
     }
+
+    #[test]
+    fn backward_compatibility_missing_fields() {
+        let json = r#"{
+            "id": "18a702d38881c900",
+            "image": {
+                "registry": "docker.io",
+                "repository": "library/hello-world",
+                "reference": {
+                    "Tag": "latest"
+                }
+            },
+            "status": {
+                "Exited": {
+                    "code": 125
+                }
+            },
+            "pid": null,
+            "created_at": "2026-04-17T02:08:05.572519Z",
+            "started_at": "2026-04-17T02:08:05.573175Z",
+            "finished_at": "2026-04-17T02:08:05.773906Z",
+            "command": [
+                "/hello"
+            ],
+            "rootfs": "/tmp/rootfs"
+        }"#;
+
+        let record: crate::ContainerRecord = serde_json::from_str(json).expect("deserialize");
+        assert!(record.mounts.is_empty());
+        assert!(record.environment.is_empty());
+        assert_eq!(record.layers, vec![std::path::PathBuf::from("/tmp/rootfs")]);
+        assert_eq!(record.workdir, None);
+    }
 }

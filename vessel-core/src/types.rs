@@ -46,10 +46,31 @@ pub struct ContainerRecord {
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
     pub command: Vec<String>,
+    #[serde(default)]
     pub environment: BTreeMap<String, String>,
+    #[serde(default)]
     pub mounts: BTreeMap<String, String>,
+    #[serde(default)]
     pub workdir: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_layers", alias = "rootfs")]
     pub layers: Vec<PathBuf>,
+}
+
+fn deserialize_layers<'de, D>(deserializer: D) -> Result<Vec<PathBuf>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum LayersOrRootfs {
+        Layers(Vec<PathBuf>),
+        Rootfs(PathBuf),
+    }
+
+    match LayersOrRootfs::deserialize(deserializer)? {
+        LayersOrRootfs::Layers(l) => Ok(l),
+        LayersOrRootfs::Rootfs(r) => Ok(vec![r]),
+    }
 }
 
 impl ContainerId {
