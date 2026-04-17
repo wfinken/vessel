@@ -1,0 +1,14 @@
+[package]
+name = "vessel"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+bpaf.workspace = true
+serde_json.workspace = true
+vessel-core = { path = "../vessel-core" }
+vessel-image = { path = "../vessel-image" }
+vessel-runtime = { path = "../vessel-runtime" }
+

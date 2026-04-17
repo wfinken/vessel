@@ -1,0 +1,10 @@
+/target
+Cargo.lock
+.DS_Store
+
+.bench-vessel-data/
+.bench-vessel-state/
+.vessel-data/
+.vessel-data-standalone/
+.vessel-state/
+.vessel-state-standalone/

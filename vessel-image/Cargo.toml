@@ -1,0 +1,21 @@
+[package]
+name = "vessel-image"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+flate2.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tar.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+ureq.workspace = true
+url.workspace = true
+vessel-core = { path = "../vessel-core" }
+zstd.workspace = true
+

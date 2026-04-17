@@ -1,0 +1,18 @@
+[package]
+name = "vessel-runtime"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+libc.workspace = true
+libloading.workspace = true
+vessel-core = { path = "../vessel-core" }
+vessel-image = { path = "../vessel-image" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "0.38", features = ["process"] }
+
+[dev-dependencies]
+tempfile.workspace = true
