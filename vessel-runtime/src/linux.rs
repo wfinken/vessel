@@ -307,15 +307,6 @@ fn find_in_path(binary: &str) -> Option<PathBuf> {
     })
 }
 
-fn host_workdir(rootfs: &Path, workdir: &str) -> Result<PathBuf, VesselError> {
-    let relative = workdir.trim_start_matches('/');
-    let path = rootfs.join(relative);
-    if !path.starts_with(rootfs) {
-        return Err(VesselError::Runtime(format!("workdir `{workdir}` escapes rootfs")));
-    }
-    Ok(path)
-}
-
 fn exit_code_for_status(status: ExitStatus) -> i32 {
     status.code().unwrap_or_else(|| status.signal().map(|signal| 128 + signal).unwrap_or(125))
 }
@@ -359,7 +350,7 @@ fn wait_for_exit(pid: u32, timeout: Duration) -> Result<(), VesselError> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, fs, process::Command};
+    use std::{collections::BTreeMap, fs, path::Path, process::Command};
 
     use tempfile::tempdir;
     use vessel_core::{ContainerStore, ImageRef, VesselPaths};
@@ -460,6 +451,18 @@ mod tests {
                 fs::create_dir_all(parent).expect("mkdir");
             }
             fs::copy(source, target).expect("copy shared object");
+        }
+    }
+
+    fn extract_ldd_path(line: &str) -> Option<String> {
+        if let Some((_, path)) = line.split_once(" => ") {
+            return path.split_whitespace().next().map(ToOwned::to_owned);
+        }
+
+        line.split_whitespace().next().filter(|value| value.starts_with('/')).map(ToOwned::to_owned)
+    }
+}
+;
         }
     }
 
