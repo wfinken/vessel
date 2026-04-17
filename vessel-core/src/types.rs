@@ -49,7 +49,7 @@ pub struct ContainerRecord {
     pub environment: BTreeMap<String, String>,
     pub mounts: BTreeMap<String, String>,
     pub workdir: Option<String>,
-    pub rootfs: PathBuf,
+    pub layers: Vec<PathBuf>,
 }
 
 impl ContainerId {
@@ -96,7 +96,7 @@ impl ContainerRecord {
         workdir: Option<String>,
         environment: BTreeMap<String, String>,
         mounts: BTreeMap<String, String>,
-        rootfs: PathBuf,
+        layers: Vec<PathBuf>,
     ) -> Self {
         Self {
             id,
@@ -110,7 +110,7 @@ impl ContainerRecord {
             environment,
             mounts,
             workdir,
-            rootfs,
+            layers,
         }
     }
 

@@ -2,15 +2,22 @@
 
 Vessel is organized as a Rust workspace:
 
-- `vessel`: CLI surface and exit-code handling.
+- `vessel`: CLI surface, daemon lifecycle commands, and exit-code handling.
 - `vessel-core`: shared types, state management, path discovery, and formatting.
+- `vessel-daemon`: optional daemon API, local backend, and remote client.
 - `vessel-image`: OCI registry client, blob cache, layer unpacker, and runtime config extraction.
 - `vessel-runtime`: runtime abstraction with Linux, macOS, and unsupported-platform backends.
+- `vesseld`: standalone daemon entrypoint.
 - `xtask`: small developer utilities such as the bootstrap cold-start harness.
 
 ## Execution model
 
-The CLI directly orchestrates every step:
+Vessel supports two execution paths:
+
+1. **Daemonless mode:** `vessel ...` executes container operations directly in the CLI process.
+2. **Daemon-backed mode:** `vessel daemon start` launches a background daemon, and `vessel --remote ...` routes lifecycle requests to it over a Unix socket.
+
+In daemonless mode the CLI directly orchestrates every step:
 
 1. Parse the requested image reference.
 2. Pull and cache OCI objects when they are missing.
@@ -18,6 +25,8 @@ The CLI directly orchestrates every step:
 4. Spawn the containerized process directly on Linux, or launch a fresh `libkrun` helper process on macOS.
 5. Persist container state as JSON without a daemon.
 6. Provide observability and cleanup via `logs`, `rm`, and `rmi`.
+
+In daemon-backed mode the daemon owns the same local backend and exposes it through a small Unix-socket HTTP API.
 
 ## Runtime features
 

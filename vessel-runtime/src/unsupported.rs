@@ -80,19 +80,11 @@ impl Runtime for UnsupportedRuntime {
         Err(VesselError::UnsupportedPlatform(self.reason()))
     }
 
-    fn remove(
-        &self,
-        _store: &ContainerStore,
-        _id: &ContainerId,
-    ) -> Result<(), VesselError> {
+    fn remove(&self, _store: &ContainerStore, _id: &ContainerId) -> Result<(), VesselError> {
         Err(VesselError::UnsupportedPlatform(self.reason()))
     }
 
-    fn logs(
-        &self,
-        _store: &ContainerStore,
-        _id: &ContainerId,
-    ) -> Result<(), VesselError> {
+    fn logs(&self, _store: &ContainerStore, _id: &ContainerId) -> Result<(), VesselError> {
         Err(VesselError::UnsupportedPlatform(self.reason()))
     }
 }
@@ -119,7 +111,7 @@ mod tests {
         assert!(!report.supported);
         assert!(!report.missing.is_empty());
         let image: ImageRef = "docker.io/library/alpine:latest".parse().expect("image");
-        let error = runtime.run(&store, &image, false, None).expect_err("unsupported");
+        let error = runtime.run(&store, &image, false, None, None, None).expect_err("unsupported");
         assert_eq!(error.exit_code(), 3);
     }
 }

@@ -1,0 +1,10 @@
+[package]
+name = "vesseld"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["full"] }
+vessel-core = { path = "../vessel-core" }
+vessel-daemon = { path = "../vessel-daemon" }

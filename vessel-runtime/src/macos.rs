@@ -101,13 +101,13 @@ impl MacOsRuntime {
     ) -> Result<RunOutcome, VesselError> {
         let mut command = self.helper_command(&record, detached)?;
         let mut child = command.spawn().map_err(map_spawn_error)?;
-        record.status = ContainerStatus::Running;
-        record.pid = Some(child.id());
-        record.started_at = Some(now_timestamp());
-        record.finished_at = None;
-        store.save(&record)?;
 
         if detached {
+            record.status = ContainerStatus::Running;
+            record.pid = Some(child.id());
+            record.started_at = Some(now_timestamp());
+            record.finished_at = None;
+            store.save(&record)?;
             return Ok(RunOutcome { record, exit_code: None });
         }
 
@@ -168,7 +168,7 @@ impl Runtime for MacOsRuntime {
             pulled.runtime.working_dir.clone(),
             environment,
             mount_override.unwrap_or_default(),
-            pulled.rootfs.clone(),
+            pulled.layers.clone(),
         );
         store.save(&record)?;
         self.spawn_record(store, record, detach)
@@ -212,11 +212,7 @@ impl Runtime for MacOsRuntime {
         store.update_status(id, ContainerStatus::Exited { code: 137 }, None, Some(now_timestamp()))
     }
 
-    fn remove(
-        &self,
-        store: &ContainerStore,
-        id: &ContainerId,
-    ) -> Result<(), VesselError> {
+    fn remove(&self, store: &ContainerStore, id: &ContainerId) -> Result<(), VesselError> {
         let record = store.load(id)?;
         if matches!(record.status, ContainerStatus::Running) {
             return Err(VesselError::ContainerAlreadyRunning(id.to_string()));
@@ -224,24 +220,22 @@ impl Runtime for MacOsRuntime {
 
         let bundle_dir = self.paths.bundles_dir.join(id.as_str());
         if bundle_dir.exists() {
-            fs::remove_dir_all(&bundle_dir).map_err(|source| VesselError::io(&bundle_dir, source))?;
+            fs::remove_dir_all(&bundle_dir)
+                .map_err(|source| VesselError::io(&bundle_dir, source))?;
         }
 
         store.remove(id)
     }
 
-    fn logs(
-        &self,
-        store: &ContainerStore,
-        id: &ContainerId,
-    ) -> Result<(), VesselError> {
+    fn logs(&self, store: &ContainerStore, id: &ContainerId) -> Result<(), VesselError> {
         let _record = store.load(id)?;
         let log_path = self.paths.bundles_dir.join(id.as_str()).join("stdio.log");
         if !log_path.exists() {
             return Ok(());
         }
 
-        let content = fs::read_to_string(&log_path).map_err(|source| VesselError::io(&log_path, source))?;
+        let content =
+            fs::read_to_string(&log_path).map_err(|source| VesselError::io(&log_path, source))?;
         print!("{content}");
         Ok(())
     }
@@ -265,7 +259,28 @@ pub fn run_macos_helper(paths: VesselPaths, id: &ContainerId) -> Result<i32, Ves
     let _ctx_guard = KrunContextGuard { api: &api, ctx };
 
     api.set_vm_config(ctx, 4, 4096)?;
-    api.set_root(ctx, &record.rootfs)?;
+
+    // We need a writable layer and a workdir for overlayfs.
+    // These will be stored in the bundle directory.
+    let upper_dir = bundle_dir.join("upper");
+    let work_dir = bundle_dir.join("work");
+    fs::create_dir_all(&upper_dir).map_err(|source| VesselError::io(&upper_dir, source))?;
+    fs::create_dir_all(&work_dir).map_err(|source| VesselError::io(&work_dir, source))?;
+
+    // Expose all layers and the bundle dir to the guest.
+    for (index, layer_path) in record.layers.iter().enumerate() {
+        api.add_virtiofs(ctx, &format!("layer{index}"), layer_path)?;
+    }
+    api.add_virtiofs(ctx, "bundle", &bundle_dir)?;
+
+    // We still need to set a root for krun to start. We'll use the first layer as a base,
+    // then pivot to the overlay in the guest.
+    let base_root = record
+        .layers
+        .first()
+        .ok_or_else(|| VesselError::Runtime("image has no layers".to_string()))?;
+    api.set_root(ctx, base_root)?;
+
     if let Some(kernel_path) = kernel_path.as_deref() {
         api.set_kernel(
             ctx,
@@ -273,25 +288,88 @@ pub fn run_macos_helper(paths: VesselPaths, id: &ContainerId) -> Result<i32, Ves
             "reboot=k panic=-1 panic_print=0 nomodule console=hvc0 rootfstype=virtiofs rw quiet no-kvmapf",
         )?;
     }
-    if let Some(workdir) = record.workdir.as_deref() {
-        api.set_workdir(ctx, workdir)?;
-    }
+
     for (index, (host_path, _guest_path)) in record.mounts.iter().enumerate() {
         let tag = format!("mount{index}");
         api.add_virtiofs(ctx, &tag, Path::new(host_path))?;
     }
-    api.set_exec(
-        ctx,
-        command_exec_path(&record.command)?,
-        &command_argv(&record.command),
-        &record.environment,
-    )?;
+
+    let (exec_path, argv) = build_macos_overlay_wrapper(&record)?;
+
+    api.set_exec(ctx, exec_path, &argv, &record.environment)?;
     api.split_irqchip(ctx, false)?;
     let detached = std::env::var("VESSEL_HELPER_DETACHED").ok().is_some_and(|value| value == "1");
     if detached {
         api.set_console_output(ctx, &krun_log)?;
     }
     api.start_enter(ctx)
+}
+
+#[cfg(test)]
+fn normalize_guest_path(path: Option<&str>) -> Option<String> {
+    match path {
+        Some("/") | None => None,
+        Some(path) => Some(path.trim_start_matches('/').to_string()),
+    }
+}
+
+#[cfg(test)]
+fn command_exec_path(command: &[String]) -> Result<&str, VesselError> {
+    command
+        .first()
+        .map(String::as_str)
+        .ok_or_else(|| VesselError::Runtime("container command is empty".to_string()))
+}
+
+#[cfg(test)]
+fn command_argv(command: &[String]) -> Vec<String> {
+    command.iter().skip(1).cloned().collect()
+}
+
+fn build_macos_overlay_wrapper(
+    record: &ContainerRecord,
+) -> Result<(String, Vec<String>), VesselError> {
+    let mut script = String::from("set -e; ");
+
+    // 1. Mount all layers and the bundle dir
+    script.push_str("mkdir -p /vessel/bundle /vessel/merged; ");
+    script.push_str("mount -t virtiofs bundle /vessel/bundle; ");
+
+    let mut lower_dirs = Vec::new();
+    for (index, _) in record.layers.iter().enumerate() {
+        let tag = format!("layer{index}");
+        let mount_point = format!("/vessel/layer{index}");
+        script
+            .push_str(&format!("mkdir -p {mount_point}; mount -t virtiofs {tag} {mount_point}; "));
+        lower_dirs.push(mount_point);
+    }
+
+    // 2. Mount overlayfs
+    // Lowerdirs should be in order from top to bottom. Our layers list is already ordered this way.
+    let lower_str = lower_dirs.join(":");
+    script.push_str(&format!(
+        "mkdir -p /vessel/bundle/upper /vessel/bundle/work; \
+         mount -t overlay overlay -o lowerdir={},upperdir=/vessel/bundle/upper,workdir=/vessel/bundle/work /vessel/merged; ",
+        lower_str
+    ));
+
+    // 3. Mount additional volumes into the merged root
+    for (index, (_, guest_path)) in record.mounts.iter().enumerate() {
+        let tag = format!("mount{index}");
+        let absolute_guest_path = format!("/vessel/merged/{}", guest_path.trim_start_matches('/'));
+        script.push_str(&format!("mkdir -p \"{absolute_guest_path}\"; mount -t virtiofs \"{tag}\" \"{absolute_guest_path}\"; "));
+    }
+
+    // 4. chroot and exec
+    let workdir = record.workdir.as_deref().unwrap_or("/");
+    script.push_str(&format!("cd /vessel/merged{}; ", workdir));
+    script.push_str("exec chroot /vessel/merged \"$0\" \"$@\"");
+
+    let mut argv = vec![String::from("-c"), script];
+    argv.extend(record.command.iter().cloned());
+
+    // We rely on the base root having /bin/sh
+    Ok((String::from("/bin/sh"), argv))
 }
 
 struct KrunContextGuard<'a> {
@@ -315,7 +393,6 @@ struct KrunApi {
     set_kernel:
         unsafe extern "C" fn(c_uint, *const c_char, c_uint, *const c_char, *const c_char) -> c_int,
     split_irqchip: unsafe extern "C" fn(c_uint, bool) -> c_int,
-    set_workdir: unsafe extern "C" fn(c_uint, *const c_char) -> c_int,
     set_exec: unsafe extern "C" fn(
         c_uint,
         *const c_char,
@@ -375,10 +452,6 @@ impl KrunApi {
                 split_irqchip: load_symbol!(
                     b"krun_split_irqchip\0",
                     unsafe extern "C" fn(c_uint, bool) -> c_int
-                ),
-                set_workdir: load_symbol!(
-                    b"krun_set_workdir\0",
-                    unsafe extern "C" fn(c_uint, *const c_char) -> c_int
                 ),
                 set_exec: load_symbol!(
                     b"krun_set_exec\0",
@@ -443,12 +516,6 @@ impl KrunApi {
             },
             "krun_set_kernel",
         )
-    }
-
-    fn set_workdir(&self, ctx: u32, workdir: &str) -> Result<(), VesselError> {
-        let workdir = CString::new(workdir)
-            .map_err(|_| VesselError::Runtime("workdir contained a NUL byte".to_string()))?;
-        self.call(unsafe { (self.set_workdir)(ctx, workdir.as_ptr()) }, "krun_set_workdir")
     }
 
     fn split_irqchip(&self, ctx: u32, enabled: bool) -> Result<(), VesselError> {
@@ -531,25 +598,6 @@ impl CStringArray {
     fn as_ptr(&self) -> *const *const c_char {
         self.pointers.as_ptr()
     }
-}
-
-fn command_exec_path(command: &[String]) -> Result<String, VesselError> {
-    command
-        .first()
-        .cloned()
-        .ok_or_else(|| VesselError::Runtime("empty command for macOS runtime".to_string()))
-}
-
-fn command_argv(command: &[String]) -> Vec<String> {
-    command.iter().skip(1).cloned().collect()
-}
-
-#[cfg(test)]
-fn normalize_guest_path(path: Option<&str>) -> Option<String> {
-    path.and_then(|path| {
-        let normalized = path.trim_matches('/');
-        if normalized.is_empty() { None } else { Some(normalized.to_string()) }
-    })
 }
 
 fn discover_libkrun_path() -> Option<PathBuf> {
