@@ -6,16 +6,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[cfg(unix)]
-use axum::{
-    Router,
-    routing::{delete, get, post},
-};
 use axum::{
     Json,
     extract::{Path as AxumPath, State},
     http::StatusCode,
     response::{IntoResponse, Response},
+};
+#[cfg(unix)]
+use axum::{
+    Router,
+    routing::{delete, get, post},
 };
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
@@ -216,28 +216,36 @@ impl RemoteBackend {
         path: &str,
         body: Option<Vec<u8>>,
     ) -> Result<HttpResponse, VesselError> {
-        let mut stream = UnixStream::connect(&self.socket_path)
-            .map_err(|source| VesselError::io(&self.socket_path, source))?;
-
-        let body = body.unwrap_or_default();
-        let request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
-            body.len()
-        );
-
-        stream.write_all(request.as_bytes()).map_err(VesselError::GenericIo)?;
-        if !body.is_empty() {
-            stream.write_all(&body).map_err(VesselError::GenericIo)?;
+        #[cfg(not(unix))]
+        {
+            let _ = (method, path, body);
+            Err(VesselError::UnsupportedPlatform("daemon is only supported on unix".into()))
         }
-        stream.flush().map_err(VesselError::GenericIo)?;
+        #[cfg(unix)]
+        {
+            let mut stream = UnixStream::connect(&self.socket_path)
+                .map_err(|source| VesselError::io(&self.socket_path, source))?;
 
-        let mut bytes = Vec::new();
-        stream.read_to_end(&mut bytes).map_err(VesselError::GenericIo)?;
-        let response = parse_http_response(&bytes)?;
-        if !(200..300).contains(&response.status) {
-            return Err(response_to_error(response));
+            let body = body.unwrap_or_default();
+            let request = format!(
+                "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
+
+            stream.write_all(request.as_bytes()).map_err(VesselError::GenericIo)?;
+            if !body.is_empty() {
+                stream.write_all(&body).map_err(VesselError::GenericIo)?;
+            }
+            stream.flush().map_err(VesselError::GenericIo)?;
+
+            let mut bytes = Vec::new();
+            stream.read_to_end(&mut bytes).map_err(VesselError::GenericIo)?;
+            let response = parse_http_response(&bytes)?;
+            if !(200..300).contains(&response.status) {
+                return Err(response_to_error(response));
+            }
+            Ok(response)
         }
-        Ok(response)
     }
 }
 
