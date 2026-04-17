@@ -462,15 +462,4 @@ mod tests {
         line.split_whitespace().next().filter(|value| value.starts_with('/')).map(ToOwned::to_owned)
     }
 }
-;
-        }
-    }
 
-    fn extract_ldd_path(line: &str) -> Option<String> {
-        if let Some((_, path)) = line.split_once(" => ") {
-            return path.split_whitespace().next().map(ToOwned::to_owned);
-        }
-
-        line.split_whitespace().next().filter(|value| value.starts_with('/')).map(ToOwned::to_owned)
-    }
-}
