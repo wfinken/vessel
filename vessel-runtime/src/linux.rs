@@ -1,5 +1,5 @@
 use std::{
-    ffi::OsString,
+    collections::BTreeMap,
     fs::{self, OpenOptions},
     os::unix::process::ExitStatusExt,
     path::{Path, PathBuf},
@@ -404,7 +404,7 @@ mod tests {
             image: "docker.io/library/test:latest".parse::<ImageRef>().expect("image"),
             manifest_digest: "sha256:test".to_string(),
             config_digest: "sha256:test".to_string(),
-            rootfs: rootfs.clone(),
+            layers: vec![rootfs.clone()],
             runtime: ImageRuntimeConfig {
                 entrypoint: vec![
                     "/bin/sh".to_string(),
@@ -423,7 +423,8 @@ mod tests {
             image.resolved_command(None).expect("resolved command"),
             image.runtime.working_dir.clone(),
             image.runtime.env.clone(),
-            image.rootfs.clone(),
+            BTreeMap::new(),
+            image.layers.clone(),
         );
         store.save(&record).expect("save record");
         let outcome = runtime.spawn_from_record(&store, record, true).expect("run detached");
@@ -468,5 +469,8 @@ mod tests {
         }
 
         line.split_whitespace().next().filter(|value| value.starts_with('/')).map(ToOwned::to_owned)
+    }
+}
+_owned)
     }
 }
