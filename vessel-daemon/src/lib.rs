@@ -6,12 +6,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(unix)]
 use axum::{
-    Json, Router,
+    Router,
+    routing::{delete, get, post},
+};
+use axum::{
+    Json,
     extract::{Path as AxumPath, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
 };
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
