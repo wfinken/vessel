@@ -554,7 +554,7 @@ fn maybe_run_internal_helper() -> Option<i32> {
     {
         let _ = paths;
         let _ = id;
-        return Some(125);
+        Some(125)
     }
 }
 
