@@ -247,14 +247,14 @@ impl Runtime for LinuxRuntime {
     ) -> Result<ContainerRecord, VesselError> {
         let record = store.load(id)?;
         let pid = record.pid.ok_or_else(|| VesselError::ContainerNotRunning(id.to_string()))?;
-        
+
         // Ignore errors if the process is already dead
         let _ = send_signal(pid, libc::SIGTERM);
         if wait_for_exit(pid, Duration::from_secs(2)).is_err() {
             let _ = send_signal(pid, libc::SIGKILL);
             wait_for_exit(pid, Duration::from_secs(2))?;
         }
-        
+
         store.update_status(id, ContainerStatus::Stopped, None, Some(now_timestamp()))
     }
 
