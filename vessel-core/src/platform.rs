@@ -82,7 +82,7 @@ fn data_dir() -> Result<PathBuf, VesselError> {
         .ok_or_else(|| VesselError::Runtime("unable to determine local data directory".to_string()))
 }
 
-fn state_dir(data_dir: &Path) -> Result<PathBuf, VesselError> {
+fn state_dir(_data_dir: &Path) -> Result<PathBuf, VesselError> {
     if let Ok(value) = env::var("VESSEL_STATE_DIR") {
         return Ok(PathBuf::from(value));
     }
@@ -93,12 +93,12 @@ fn state_dir(data_dir: &Path) -> Result<PathBuf, VesselError> {
             return Ok(PathBuf::from(runtime_dir).join("vessel"));
         }
 
-        return Ok(env::temp_dir().join("vessel-runtime"));
+        Ok(env::temp_dir().join("vessel-runtime"))
     }
 
     #[cfg(not(target_os = "linux"))]
     {
-        Ok(data_dir.join("state"))
+        Ok(_data_dir.join("state"))
     }
 }
 
