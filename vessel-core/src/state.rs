@@ -162,7 +162,8 @@ mod tests {
             vec!["/bin/echo".into(), "hello".into()],
             None,
             Default::default(),
-            dir.path().join("rootfs"),
+            Default::default(),
+            vec![dir.path().join("rootfs")],
         );
         store.save(&record).expect("save");
 

@@ -45,13 +45,17 @@ impl LinuxRuntime {
         detached: bool,
     ) -> Result<RunOutcome, VesselError> {
         let tools = self.required_tools()?;
-        let workdir = record.workdir.clone().unwrap_or_else(|| "/".to_string());
-        let host_workdir = host_workdir(&record.rootfs, &workdir)?;
-        fs::create_dir_all(&host_workdir)
-            .map_err(|source| VesselError::io(&host_workdir, source))?;
-
         let bundle_dir = self.paths.bundles_dir.join(record.id().as_str());
         fs::create_dir_all(&bundle_dir).map_err(|source| VesselError::io(&bundle_dir, source))?;
+
+        // We need a writable layer and a workdir for overlayfs.
+        let upper_dir = bundle_dir.join("upper");
+        let work_dir = bundle_dir.join("work");
+        let merged_dir = bundle_dir.join("merged");
+        fs::create_dir_all(&upper_dir).map_err(|source| VesselError::io(&upper_dir, source))?;
+        fs::create_dir_all(&work_dir).map_err(|source| VesselError::io(&work_dir, source))?;
+        fs::create_dir_all(&merged_dir).map_err(|source| VesselError::io(&merged_dir, source))?;
+
         let log_path = bundle_dir.join("stdio.log");
 
         let mut command = Command::new(&tools.unshare);
@@ -62,12 +66,12 @@ impl LinuxRuntime {
             .arg("--pid")
             .arg("--fork")
             .arg("--kill-child")
-            .arg("--mount-proc")
-            .arg(&tools.chroot)
-            .arg(&record.rootfs)
-            .args(&record.command)
-            .current_dir(&host_workdir)
-            .env_clear();
+            .arg("--mount-proc");
+
+        let (exec_path, args) = build_linux_overlay_wrapper(&record, &tools, &bundle_dir);
+        command.arg(exec_path).args(args);
+
+        command.current_dir("/").env_clear();
 
         if !record.environment.contains_key("PATH") {
             command.env("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
@@ -110,6 +114,56 @@ impl LinuxRuntime {
     }
 }
 
+fn build_linux_overlay_wrapper(
+    record: &ContainerRecord,
+    tools: &ToolPaths,
+    bundle_dir: &Path,
+) -> (String, Vec<String>) {
+    let mut script = String::from("set -e; ");
+
+    let upper_dir = bundle_dir.join("upper");
+    let work_dir = bundle_dir.join("work");
+    let merged_dir = bundle_dir.join("merged");
+
+    // 1. Mount overlayfs
+    // Lowerdirs should be in order from top to bottom.
+    let lower_str =
+        record.layers.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>().join(":");
+
+    script.push_str(&format!(
+        "mount -t overlay overlay -o lowerdir={},upperdir={},workdir={} {}; ",
+        lower_str,
+        upper_dir.display(),
+        work_dir.display(),
+        merged_dir.display()
+    ));
+
+    // 2. Mount additional volumes into the merged root
+    for (host_path, guest_path) in &record.mounts {
+        let absolute_guest_path = merged_dir.join(guest_path.trim_start_matches('/'));
+        script.push_str(&format!("mkdir -p \"{}\"; ", absolute_guest_path.display()));
+        script.push_str(&format!(
+            "mount --bind \"{}\" \"{}\"; ",
+            host_path,
+            absolute_guest_path.display()
+        ));
+    }
+
+    // 3. chroot and exec
+    let workdir = record.workdir.as_deref().unwrap_or("/");
+    script.push_str(&format!("cd \"{}{}\"; ", merged_dir.display(), workdir));
+    script.push_str(&format!(
+        "exec \"{}\" \"{}\" \"$0\" \"$@\"",
+        tools.chroot.display(),
+        merged_dir.display()
+    ));
+
+    let mut argv = vec![String::from("-c"), script];
+    argv.extend(record.command.iter().cloned());
+
+    (String::from("/bin/sh"), argv)
+}
+
 impl Runtime for LinuxRuntime {
     fn capability_report(&self) -> CapabilityReport {
         let mut missing = Vec::new();
@@ -147,16 +201,27 @@ impl Runtime for LinuxRuntime {
         image: &ImageRef,
         detach: bool,
         command_override: Option<Vec<String>>,
+        env_override: Option<BTreeMap<String, String>>,
+        mount_override: Option<BTreeMap<String, String>>,
     ) -> Result<RunOutcome, VesselError> {
         let image_store = ImageStore::new(self.paths.clone());
         let image = image_store.pull(image)?;
+
+        let mut environment = image.runtime.env.clone();
+        if let Some(overrides) = env_override {
+            for (key, value) in overrides {
+                environment.insert(key, value);
+            }
+        }
+
         let record = ContainerRecord::new(
             ContainerId::generate(),
             image.image.clone(),
             image.resolved_command(command_override.as_deref())?,
             image.runtime.working_dir.clone(),
-            image.runtime.env.clone(),
-            image.rootfs.clone(),
+            environment,
+            mount_override.unwrap_or_default(),
+            image.layers.clone(),
         );
         store.save(&record)?;
         self.spawn_from_record(store, record, detach)
@@ -197,6 +262,34 @@ impl Runtime for LinuxRuntime {
         send_signal(pid, libc::SIGKILL)?;
         wait_for_exit(pid, Duration::from_secs(2))?;
         store.update_status(id, ContainerStatus::Exited { code: 137 }, None, Some(now_timestamp()))
+    }
+
+    fn remove(&self, store: &ContainerStore, id: &ContainerId) -> Result<(), VesselError> {
+        let record = store.load(id)?;
+        if matches!(record.status, ContainerStatus::Running) {
+            return Err(VesselError::ContainerAlreadyRunning(id.to_string()));
+        }
+
+        let bundle_dir = self.paths.bundles_dir.join(id.as_str());
+        if bundle_dir.exists() {
+            fs::remove_dir_all(&bundle_dir)
+                .map_err(|source| VesselError::io(&bundle_dir, source))?;
+        }
+
+        store.remove(id)
+    }
+
+    fn logs(&self, store: &ContainerStore, id: &ContainerId) -> Result<(), VesselError> {
+        let _record = store.load(id)?;
+        let log_path = self.paths.bundles_dir.join(id.as_str()).join("stdio.log");
+        if !log_path.exists() {
+            return Ok(());
+        }
+
+        let content =
+            fs::read_to_string(&log_path).map_err(|source| VesselError::io(&log_path, source))?;
+        print!("{content}");
+        Ok(())
     }
 }
 

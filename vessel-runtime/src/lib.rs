@@ -43,16 +43,8 @@ pub trait Runtime {
         store: &ContainerStore,
         id: &ContainerId,
     ) -> Result<ContainerRecord, VesselError>;
-    fn remove(
-        &self,
-        store: &ContainerStore,
-        id: &ContainerId,
-    ) -> Result<(), VesselError>;
-    fn logs(
-        &self,
-        store: &ContainerStore,
-        id: &ContainerId,
-    ) -> Result<(), VesselError>;
+    fn remove(&self, store: &ContainerStore, id: &ContainerId) -> Result<(), VesselError>;
+    fn logs(&self, store: &ContainerStore, id: &ContainerId) -> Result<(), VesselError>;
 }
 
 #[derive(Debug, Clone)]

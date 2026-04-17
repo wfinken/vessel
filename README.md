@@ -12,9 +12,11 @@ Unlike traditional container runtimes that rely on a persistent background servi
     - **Linux:** Uses native kernel namespaces (`unshare`), `chroot`, and `mount` for rootless execution.
     - **macOS:** Spawns lightweight microVMs using `libkrun` and `virtiofs` for native performance.
 - **OCI Compatible:** Pull, unpack, and execute standard images from any public registry (Docker Hub, GHCR, etc.).
+- **Private Registry Ready:** Reuses credentials from standard Docker/Podman auth files so authenticated pulls work after `docker login` or `podman login`.
 - **Runtime Flexibility:** Supports environment variable injection (`-e`) and host volume mounting (`-v`) with automated guest-side setup.
 - **Resource Management:** Comprehensive suite of commands for container lifecycle (`run`, `start`, `stop`, `kill`, `rm`) and image management (`rmi`).
 - **Observability:** Integrated logging (`logs`) to inspect stdout/stderr from background containers.
+- **Compose-Style Projects:** Launch and manage YAML-defined multi-service stacks with `vessel compose`.
 
 ## 🛠 Getting Started
 
@@ -74,6 +76,40 @@ vessel run -v $(pwd):/app alpine -- ls /app
 ```bash
 vessel logs <container_id>
 ```
+
+**Pull from a private registry after logging in with Docker or Podman:**
+```bash
+docker login registry.example.com
+vessel run registry.example.com/team/app:latest
+```
+
+Vessel checks `VESSEL_REGISTRY_AUTH_FILE`, `REGISTRY_AUTH_FILE`, Docker's `config.json`, and common Podman `auth.json` locations when resolving registry credentials.
+
+**Start a multi-service project from YAML:**
+```yaml
+name: demo
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: secret
+  api:
+    image: ghcr.io/acme/api:latest
+    command: ["./bin/api"]
+    volumes:
+      - ./app:/workspace
+    depends_on:
+      - db
+```
+
+```bash
+vessel compose up
+vessel compose ps
+vessel compose logs api
+vessel compose down
+```
+
+The current compose implementation supports `image`, `command`, `environment`, `volumes`, `depends_on`, and an optional top-level `name`. Relative bind mounts are resolved from the compose file's directory.
 
 ### Lifecycle Management
 
