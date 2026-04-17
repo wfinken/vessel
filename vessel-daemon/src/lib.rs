@@ -14,6 +14,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
 use tokio::net::UnixListener;
 use vessel_core::{
     ContainerId, ContainerRecord, ContainerStore, ImageRef, VesselError, VesselPaths,
@@ -339,39 +340,47 @@ pub async fn run_daemon(
     paths: VesselPaths,
     socket_path: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if socket_path.exists() {
-        fs::remove_file(socket_path)?;
+    #[cfg(not(unix))]
+    {
+        let _ = (paths, socket_path);
+        Err("daemon is only supported on unix".into())
     }
-    if let Some(parent) = socket_path.parent() {
-        fs::create_dir_all(parent)?;
+    #[cfg(unix)]
+    {
+        if socket_path.exists() {
+            fs::remove_file(socket_path)?;
+        }
+        if let Some(parent) = socket_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let pid_path = pid_path(&paths);
+        if pid_path.exists() {
+            fs::remove_file(&pid_path)?;
+        }
+
+        let state = DaemonState { backend: LocalBackend::new(paths) };
+
+        let app = Router::new()
+            .route("/containers", get(list_containers))
+            .route("/containers", post(run_container))
+            .route("/containers/{id}/start", post(start_container))
+            .route("/containers/{id}/stop", post(stop_container))
+            .route("/containers/{id}/kill", post(kill_container))
+            .route("/containers/{id}", delete(remove_container))
+            .route("/containers/{id}/logs", get(container_logs))
+            .route("/images", get(list_images))
+            .route("/images/gc", post(garbage_collect_images))
+            .route("/images/remove", post(remove_image))
+            .with_state(state);
+
+        let listener = UnixListener::bind(socket_path)?;
+        fs::write(&pid_path, std::process::id().to_string())?;
+        let _guard = DaemonGuard { socket_path: socket_path.to_path_buf(), pid_path };
+        axum::serve(listener, app).await?;
+
+        Ok(())
     }
-
-    let pid_path = pid_path(&paths);
-    if pid_path.exists() {
-        fs::remove_file(&pid_path)?;
-    }
-
-    let state = DaemonState { backend: LocalBackend::new(paths) };
-
-    let app = Router::new()
-        .route("/containers", get(list_containers))
-        .route("/containers", post(run_container))
-        .route("/containers/{id}/start", post(start_container))
-        .route("/containers/{id}/stop", post(stop_container))
-        .route("/containers/{id}/kill", post(kill_container))
-        .route("/containers/{id}", delete(remove_container))
-        .route("/containers/{id}/logs", get(container_logs))
-        .route("/images", get(list_images))
-        .route("/images/gc", post(garbage_collect_images))
-        .route("/images/remove", post(remove_image))
-        .with_state(state);
-
-    let listener = UnixListener::bind(socket_path)?;
-    fs::write(&pid_path, std::process::id().to_string())?;
-    let _guard = DaemonGuard { socket_path: socket_path.to_path_buf(), pid_path };
-    axum::serve(listener, app).await?;
-
-    Ok(())
 }
 
 struct DaemonGuard {
