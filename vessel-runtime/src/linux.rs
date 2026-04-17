@@ -471,6 +471,3 @@ mod tests {
         line.split_whitespace().next().filter(|value| value.starts_with('/')).map(ToOwned::to_owned)
     }
 }
-_owned)
-    }
-}
