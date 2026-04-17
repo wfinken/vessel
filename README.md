@@ -1,68 +1,102 @@
 # Vessel
 
-Vessel is a lightweight, daemonless container engine and runtime written in Rust.
-This bootstrap targets three goals:
+**Vessel** is a high-performance, daemonless OCI container engine built in Rust. It provides a "pay-as-you-go" resource model for containerized workloads, ensuring that no standing daemons or background processes consume memory when your containers aren't running.
 
-- Build and test cleanly on macOS, Linux, and Windows.
-- Execute OCI images locally without a resident daemon.
-- Keep the CLI small, scriptable, and explicit about unsupported capabilities.
+Unlike traditional container runtimes that rely on a persistent background service (like Docker Desktop), Vessel operates as a standalone CLI. It leverages native Linux namespaces and macOS-specific microVM technology (**libkrun**) to provide secure, isolated environments with minimal overhead.
 
-Current bootstrap commands:
+## 🚀 Key Features
 
-- `vessel run [-d] [-e ENV] [-v VOLUME] <image> [command...]`
-- `vessel start <id>`
-- `vessel stop <id>`
-- `vessel kill <id>`
-- `vessel rm <id>`
-- `vessel logs <id>`
-- `vessel ps [--format table|json]`
-- `vessel rmi <image>`
+- **Daemonless Operation:** Zero resident memory footprint. When the container stops, the engine stops.
+- **Cross-Platform Native:**
+    - **Linux:** Uses native kernel namespaces (`unshare`) and `chroot` for rootless execution.
+    - **macOS:** Spawns lightweight microVMs using `libkrun` for native performance on Apple Silicon and Intel.
+- **OCI Compatible:** Pull, unpack, and execute standard images from any public registry (Docker Hub, GHCR, etc.).
+- **Runtime Flexibility:** Supports environment variable injection (`-e`) and host volume mounting (`-v`).
+- **Resource Management:** Comprehensive suite of commands for container lifecycle (`run`, `start`, `stop`, `kill`, `rm`) and image management (`rmi`).
+- **Observability:** Integrated logging (`logs`) to inspect stdout/stderr from background containers.
 
-For local testing and automation, `VESSEL_DATA_DIR` and `VESSEL_STATE_DIR`
-override the default cache and state locations.
+## 🛠 Getting Started
 
-## Status
+### Prerequisites
 
-This is a bootstrap release. The image pipeline supports anonymous pulls from
-public registries and unpacks layered OCI images into a reusable root filesystem
-cache. Linux execution uses a rootless-first launch path that relies on user and
-pid namespaces via `unshare` plus `chroot`. macOS execution uses a per-container
-`libkrun` microVM helper process with no resident daemon.
+- **Rust:** You will need the latest stable version of the Rust toolchain.
+- **macOS:** You must have `libkrun` installed. We recommend using Homebrew:
+  ```bash
+  brew install slp/krun/libkrun
+  ```
+- **Linux:** A kernel supporting user namespaces (standard on most modern distributions).
 
-Vessel now supports:
-- **Environment Overrides:** Pass `-e KEY=VALUE` to inject variables at runtime.
-- **Volume Mounts:** Pass `-v host_path:guest_path` to expose host directories to the container (macOS uses virtiofs).
-- **Resource Cleanup:** Remove containers (`rm`) and images (`rmi`) to reclaim disk space.
-- **Observability:** View detached container output via `vessel logs`.
+### Installation
 
-## macOS runtime
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/wfinken/vessel.git
+   cd vessel
+   ```
 
-The macOS backend expects a local `libkrun` install and discovers it in common
-Homebrew locations first:
+2. **Build the binary:**
+   ```bash
+   cargo build --release
+   ```
 
-- `/opt/homebrew/opt/libkrun/lib/libkrun.1.dylib`
-- `/usr/local/opt/libkrun/lib/libkrun.1.dylib`
+3. **Sign the binary (macOS only):**
+   Vessel requires specific entitlements to manage hypervisor resources on macOS. Use the included helper task to sign the binary:
+   ```bash
+   cargo run -p xtask -- sign-macos target/release/vessel
+   ```
 
-You can also point Vessel at an explicit library with
-`VESSEL_LIBKRUN_PATH=/absolute/path/to/libkrun.1.dylib`.
+4. **Add to your PATH:**
+   Move `target/release/vessel` to a directory in your `$PATH` (e.g., `/usr/local/bin`).
 
-If you have a separate kernel you want Vessel to use, set
-`VESSEL_LIBKRUN_KERNEL_PATH=/absolute/path/to/kernel`. For the upstream
-standalone `libkrun` flow this is optional; Vessel only uses it when present.
+## 📖 Usage
 
-After `cargo build` or `cargo build --release`, sign the Vessel binary before
-running containers on macOS:
+Vessel's CLI is designed to be familiar to users of Docker or Podman.
 
+### Basic Examples
+
+**Run a simple command:**
 ```bash
-cargo run -p xtask -- sign-macos
+vessel run alpine -- echo "Hello from Vessel"
 ```
 
-That signs `target/debug/vessel` using the checked-in `vessel.entitlements`
-profile. To sign a different binary path, pass it explicitly:
-
+**Run a background (detached) container with environment variables:**
 ```bash
-cargo run -p xtask -- sign-macos target/release/vessel
+vessel run -d -e DB_HOST=localhost -e DB_PORT=5432 postgres:latest
 ```
 
-Planned next steps are tracked in [ROADMAP.md](ROADMAP.md) and the system shape
-is summarized in [ARCHITECTURE.md](ARCHITECTURE.md).
+**Mount a host directory into the container:**
+```bash
+vessel run -v $(pwd):/app alpine -- ls /app
+```
+
+**View logs from a background container:**
+```bash
+vessel logs <container_id>
+```
+
+### Lifecycle Management
+
+- `vessel ps`: List all known containers.
+- `vessel stop <id>`: Request a graceful shutdown.
+- `vessel rm <id>`: Remove a stopped container's state and logs.
+- `vessel rmi <image>`: Remove a cached image and its root filesystem.
+
+## 🤝 Contributing
+
+We welcome contributions from the community! Whether you are fixing a bug, adding a feature, or improving documentation, your help is appreciated.
+
+1. Fork the repository.
+2. Create a new branch (`git checkout -b feature/my-new-feature`).
+3. Commit your changes (`git commit -m 'Add some feature'`).
+4. Push to the branch (`git push origin feature/my-new-feature`).
+5. Open a Pull Request.
+
+Please ensure your code follows the existing style and includes appropriate tests.
+
+## ⚖️ License
+
+Vessel is dual-licensed under:
+- **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE))
+- **MIT License** ([LICENSE-MIT](LICENSE-MIT))
+
+Choose the one that best fits your needs.
