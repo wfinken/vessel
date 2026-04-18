@@ -474,7 +474,12 @@ impl KrunApi {
                 ),
                 set_network: load_symbol!(
                     b"krun_set_network\0",
-                    unsafe extern "C" fn(c_uint, *const c_char, *const c_char, *const c_char) -> c_int
+                    unsafe extern "C" fn(
+                        c_uint,
+                        *const c_char,
+                        *const c_char,
+                        *const c_char,
+                    ) -> c_int
                 ),
                 add_port_forward: load_symbol!(
                     b"krun_add_port_forward\0",
@@ -562,8 +567,9 @@ impl KrunApi {
             .map_err(|_| VesselError::Runtime("IP address contained a NUL byte".to_string()))?;
         let mask = CString::new(mask)
             .map_err(|_| VesselError::Runtime("network mask contained a NUL byte".to_string()))?;
-        let gw = CString::new(gw)
-            .map_err(|_| VesselError::Runtime("gateway address contained a NUL byte".to_string()))?;
+        let gw = CString::new(gw).map_err(|_| {
+            VesselError::Runtime("gateway address contained a NUL byte".to_string())
+        })?;
         self.call(
             unsafe { (self.set_network)(ctx, ip.as_ptr(), mask.as_ptr(), gw.as_ptr()) },
             "krun_set_network",
