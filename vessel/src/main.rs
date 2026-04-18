@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io;
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
+#[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process;
@@ -617,7 +619,11 @@ fn daemon_status(paths: &VesselPaths) -> Result<i32, VesselError> {
 fn stop_daemon(paths: &VesselPaths) -> Result<i32, VesselError> {
     match daemon_state(paths)? {
         DaemonState::Running(pid) => {
-            send_signal(pid, libc::SIGTERM)?;
+            #[cfg(unix)]
+            let sig = libc::SIGTERM;
+            #[cfg(not(unix))]
+            let sig = 15;
+            send_signal(pid, sig)?;
             wait_for_pid_exit(pid, Duration::from_secs(5))?;
             cleanup_daemon_files(paths)?;
             println!("Stopped vessel daemon ({pid})");
@@ -706,8 +712,16 @@ fn cleanup_daemon_files(paths: &VesselPaths) -> Result<(), VesselError> {
 }
 
 fn pid_exists(pid: i32) -> bool {
-    let result = unsafe { libc::kill(pid, 0) };
-    result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    #[cfg(unix)]
+    {
+        let result = unsafe { libc::kill(pid, 0) };
+        result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
+    }
 }
 
 fn send_signal(pid: i32, signal: i32) -> Result<(), VesselError> {
@@ -747,12 +761,17 @@ fn wait_for_pid_exit(pid: i32, timeout: Duration) -> Result<(), VesselError> {
 
 fn describe_status(status: ExitStatus) -> String {
     if let Some(code) = status.code() {
-        code.to_string()
-    } else if let Some(signal) = status.signal() {
-        format!("signal {signal}")
-    } else {
-        "unknown".to_string()
+        return code.to_string();
     }
+
+    #[cfg(unix)]
+    {
+        if let Some(signal) = status.signal() {
+            return format!("signal {signal}");
+        }
+    }
+
+    "unknown".to_string()
 }
 
 enum DaemonState {
