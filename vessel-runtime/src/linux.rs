@@ -102,21 +102,13 @@ impl LinuxRuntime {
         if let Some(slirp_path) = &tools.slirp4netns {
             let pid = child.id();
             let mut slirp_cmd = Command::new(slirp_path);
-            slirp_cmd
-                .arg("--configure")
-                .arg("--mtu")
-                .arg("65520")
-                .arg(pid.to_string())
-                .arg("tap0");
+            slirp_cmd.arg("--configure").arg("--mtu").arg("65520").arg(pid.to_string()).arg("tap0");
 
             for (host_port, guest_port) in &record.ports {
                 slirp_cmd.arg("-p").arg(format!("{host_port}:{guest_port}"));
             }
 
-            slirp_cmd
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null());
+            slirp_cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
 
             slirp_cmd.spawn().map_err(|source| {
                 VesselError::Runtime(format!("failed to start slirp4netns: {source}"))
@@ -470,6 +462,7 @@ mod tests {
             image.resolved_command(None).expect("resolved command"),
             image.runtime.working_dir.clone(),
             image.runtime.env.clone(),
+            BTreeMap::new(),
             BTreeMap::new(),
             image.layers.clone(),
         );

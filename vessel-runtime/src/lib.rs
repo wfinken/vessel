@@ -19,6 +19,7 @@ pub use unsupported::UnsupportedRuntime;
 
 pub trait Runtime {
     fn capability_report(&self) -> CapabilityReport;
+    #[allow(clippy::too_many_arguments)]
     fn run(
         &self,
         store: &ContainerStore,

@@ -490,6 +490,7 @@ services:
                         command: None,
                         environment: BTreeMap::new(),
                         mounts: BTreeMap::new(),
+                        ports: BTreeMap::new(),
                         depends_on: Vec::new(),
                     },
                 },

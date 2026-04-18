@@ -163,6 +163,7 @@ mod tests {
             None,
             Default::default(),
             Default::default(),
+            Default::default(),
             vec![dir.path().join("rootfs")],
         );
         store.save(&record).expect("save");
