@@ -1,19 +1,30 @@
+#![cfg_attr(not(unix), allow(dead_code, unused_imports, unused_variables))]
+
 use std::{
     collections::BTreeMap,
     fs,
-    io::{Read, Write},
-    os::unix::net::UnixStream,
     path::{Path, PathBuf},
 };
 
+#[cfg(unix)]
+use std::{
+    io::{Read, Write},
+    os::unix::net::UnixStream,
+};
+
 use axum::{
-    Json, Router,
+    Json,
     extract::{Path as AxumPath, State},
     http::StatusCode,
     response::{IntoResponse, Response},
+};
+#[cfg(unix)]
+use axum::{
+    Router,
     routing::{delete, get, post},
 };
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
 use tokio::net::UnixListener;
 use vessel_core::{
     ContainerId, ContainerRecord, ContainerStore, ImageRef, VesselError, VesselPaths,
@@ -211,28 +222,36 @@ impl RemoteBackend {
         path: &str,
         body: Option<Vec<u8>>,
     ) -> Result<HttpResponse, VesselError> {
-        let mut stream = UnixStream::connect(&self.socket_path)
-            .map_err(|source| VesselError::io(&self.socket_path, source))?;
-
-        let body = body.unwrap_or_default();
-        let request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
-            body.len()
-        );
-
-        stream.write_all(request.as_bytes()).map_err(VesselError::GenericIo)?;
-        if !body.is_empty() {
-            stream.write_all(&body).map_err(VesselError::GenericIo)?;
+        #[cfg(not(unix))]
+        {
+            let _ = (method, path, body);
+            Err(VesselError::UnsupportedPlatform("daemon is only supported on unix".into()))
         }
-        stream.flush().map_err(VesselError::GenericIo)?;
+        #[cfg(unix)]
+        {
+            let mut stream = UnixStream::connect(&self.socket_path)
+                .map_err(|source| VesselError::io(&self.socket_path, source))?;
 
-        let mut bytes = Vec::new();
-        stream.read_to_end(&mut bytes).map_err(VesselError::GenericIo)?;
-        let response = parse_http_response(&bytes)?;
-        if !(200..300).contains(&response.status) {
-            return Err(response_to_error(response));
+            let body = body.unwrap_or_default();
+            let request = format!(
+                "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
+
+            stream.write_all(request.as_bytes()).map_err(VesselError::GenericIo)?;
+            if !body.is_empty() {
+                stream.write_all(&body).map_err(VesselError::GenericIo)?;
+            }
+            stream.flush().map_err(VesselError::GenericIo)?;
+
+            let mut bytes = Vec::new();
+            stream.read_to_end(&mut bytes).map_err(VesselError::GenericIo)?;
+            let response = parse_http_response(&bytes)?;
+            if !(200..300).contains(&response.status) {
+                return Err(response_to_error(response));
+            }
+            Ok(response)
         }
-        Ok(response)
     }
 }
 
@@ -339,39 +358,47 @@ pub async fn run_daemon(
     paths: VesselPaths,
     socket_path: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if socket_path.exists() {
-        fs::remove_file(socket_path)?;
+    #[cfg(not(unix))]
+    {
+        let _ = (paths, socket_path);
+        Err("daemon is only supported on unix".into())
     }
-    if let Some(parent) = socket_path.parent() {
-        fs::create_dir_all(parent)?;
+    #[cfg(unix)]
+    {
+        if socket_path.exists() {
+            fs::remove_file(socket_path)?;
+        }
+        if let Some(parent) = socket_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let pid_path = pid_path(&paths);
+        if pid_path.exists() {
+            fs::remove_file(&pid_path)?;
+        }
+
+        let state = DaemonState { backend: LocalBackend::new(paths) };
+
+        let app = Router::new()
+            .route("/containers", get(list_containers))
+            .route("/containers", post(run_container))
+            .route("/containers/{id}/start", post(start_container))
+            .route("/containers/{id}/stop", post(stop_container))
+            .route("/containers/{id}/kill", post(kill_container))
+            .route("/containers/{id}", delete(remove_container))
+            .route("/containers/{id}/logs", get(container_logs))
+            .route("/images", get(list_images))
+            .route("/images/gc", post(garbage_collect_images))
+            .route("/images/remove", post(remove_image))
+            .with_state(state);
+
+        let listener = UnixListener::bind(socket_path)?;
+        fs::write(&pid_path, std::process::id().to_string())?;
+        let _guard = DaemonGuard { socket_path: socket_path.to_path_buf(), pid_path };
+        axum::serve(listener, app).await?;
+
+        Ok(())
     }
-
-    let pid_path = pid_path(&paths);
-    if pid_path.exists() {
-        fs::remove_file(&pid_path)?;
-    }
-
-    let state = DaemonState { backend: LocalBackend::new(paths) };
-
-    let app = Router::new()
-        .route("/containers", get(list_containers))
-        .route("/containers", post(run_container))
-        .route("/containers/{id}/start", post(start_container))
-        .route("/containers/{id}/stop", post(stop_container))
-        .route("/containers/{id}/kill", post(kill_container))
-        .route("/containers/{id}", delete(remove_container))
-        .route("/containers/{id}/logs", get(container_logs))
-        .route("/images", get(list_images))
-        .route("/images/gc", post(garbage_collect_images))
-        .route("/images/remove", post(remove_image))
-        .with_state(state);
-
-    let listener = UnixListener::bind(socket_path)?;
-    fs::write(&pid_path, std::process::id().to_string())?;
-    let _guard = DaemonGuard { socket_path: socket_path.to_path_buf(), pid_path };
-    axum::serve(listener, app).await?;
-
-    Ok(())
 }
 
 struct DaemonGuard {

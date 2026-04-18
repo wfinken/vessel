@@ -1,5 +1,5 @@
 use std::{
-    ffi::OsString,
+    collections::BTreeMap,
     fs::{self, OpenOptions},
     os::unix::process::ExitStatusExt,
     path::{Path, PathBuf},
@@ -247,8 +247,14 @@ impl Runtime for LinuxRuntime {
     ) -> Result<ContainerRecord, VesselError> {
         let record = store.load(id)?;
         let pid = record.pid.ok_or_else(|| VesselError::ContainerNotRunning(id.to_string()))?;
-        send_signal(pid, libc::SIGTERM)?;
-        wait_for_exit(pid, Duration::from_secs(2))?;
+
+        // Ignore errors if the process is already dead
+        let _ = send_signal(pid, libc::SIGTERM);
+        if wait_for_exit(pid, Duration::from_secs(2)).is_err() {
+            let _ = send_signal(pid, libc::SIGKILL);
+            wait_for_exit(pid, Duration::from_secs(2))?;
+        }
+
         store.update_status(id, ContainerStatus::Stopped, None, Some(now_timestamp()))
     }
 
@@ -307,15 +313,6 @@ fn find_in_path(binary: &str) -> Option<PathBuf> {
     })
 }
 
-fn host_workdir(rootfs: &Path, workdir: &str) -> Result<PathBuf, VesselError> {
-    let relative = workdir.trim_start_matches('/');
-    let path = rootfs.join(relative);
-    if !path.starts_with(rootfs) {
-        return Err(VesselError::Runtime(format!("workdir `{workdir}` escapes rootfs")));
-    }
-    Ok(path)
-}
-
 fn exit_code_for_status(status: ExitStatus) -> i32 {
     status.code().unwrap_or_else(|| status.signal().map(|signal| 128 + signal).unwrap_or(125))
 }
@@ -345,12 +342,25 @@ fn send_signal(pid: u32, signal: i32) -> Result<(), VesselError> {
 
 fn wait_for_exit(pid: u32, timeout: Duration) -> Result<(), VesselError> {
     let proc_path = PathBuf::from(format!("/proc/{pid}"));
+    let stat_path = proc_path.join("stat");
     let deadline = Instant::now() + timeout;
 
     while Instant::now() < deadline {
         if !proc_path.exists() {
             return Ok(());
         }
+
+        // Also consider the process exited if it has become a zombie
+        if let Ok(stat) = fs::read_to_string(&stat_path) {
+            if let Some(rparen) = stat.rfind(')') {
+                let after_paren = &stat[rparen + 1..];
+                let parts: Vec<&str> = after_paren.split_whitespace().collect();
+                if parts.first() == Some(&"Z") || parts.first() == Some(&"X") {
+                    return Ok(());
+                }
+            }
+        }
+
         thread::sleep(Duration::from_millis(50));
     }
 
@@ -359,7 +369,7 @@ fn wait_for_exit(pid: u32, timeout: Duration) -> Result<(), VesselError> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, fs, process::Command};
+    use std::{collections::BTreeMap, fs, path::Path, process::Command};
 
     use tempfile::tempdir;
     use vessel_core::{ContainerStore, ImageRef, VesselPaths};
@@ -404,7 +414,7 @@ mod tests {
             image: "docker.io/library/test:latest".parse::<ImageRef>().expect("image"),
             manifest_digest: "sha256:test".to_string(),
             config_digest: "sha256:test".to_string(),
-            rootfs: rootfs.clone(),
+            layers: vec![rootfs.clone()],
             runtime: ImageRuntimeConfig {
                 entrypoint: vec![
                     "/bin/sh".to_string(),
@@ -423,7 +433,8 @@ mod tests {
             image.resolved_command(None).expect("resolved command"),
             image.runtime.working_dir.clone(),
             image.runtime.env.clone(),
-            image.rootfs.clone(),
+            BTreeMap::new(),
+            image.layers.clone(),
         );
         store.save(&record).expect("save record");
         let outcome = runtime.spawn_from_record(&store, record, true).expect("run detached");

@@ -56,7 +56,7 @@ pub struct RunOutcome {
 pub fn default_runtime(paths: VesselPaths) -> Box<dyn Runtime> {
     #[cfg(target_os = "linux")]
     {
-        return Box::new(LinuxRuntime::new(paths));
+        Box::new(LinuxRuntime::new(paths))
     }
 
     #[cfg(target_os = "macos")]

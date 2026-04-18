@@ -88,7 +88,7 @@ impl ContainerStore {
     fn reconcile(&self, record: ContainerRecord) -> Result<ContainerRecord, VesselError> {
         #[cfg(target_os = "linux")]
         {
-            return self.reconcile_linux(record);
+            self.reconcile_linux(record)
         }
 
         #[cfg(target_os = "macos")]
