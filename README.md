@@ -1,34 +1,35 @@
 # Vessel
 
-**Vessel** is a high-performance, daemonless OCI container engine built in Rust. It provides a "pay-as-you-go" resource model for containerized workloads, ensuring that no standing daemons or background processes consume memory when your containers aren't running.
+**Vessel** is a high-performance OCI container engine built in Rust. It is daemonless by default, giving containerized workloads a "pay-as-you-go" resource model with no standing background process when nothing is running.
 
-Unlike traditional container runtimes that rely on a persistent background service (like Docker Desktop), Vessel operates as a standalone CLI. It leverages native Linux namespaces and macOS-specific microVM technology (**libkrun**) to provide secure, isolated environments with minimal overhead.
+Unlike traditional runtimes that require a persistent service, Vessel can execute containers directly from the CLI. When you want a long-lived control plane, it also offers an optional local daemon that the CLI can talk to with `--remote`. Under the hood, Vessel uses native Linux namespaces and macOS-specific microVM technology (**libkrun**) to provide secure, isolated environments with minimal overhead.
 
 ## 🚀 Key Features
 
-- **Daemonless Operation:** Zero resident memory footprint. When the container stops, the engine stops.
-- **Efficient Layered Storage:** Uses **Overlayfs** to combine immutable OCI layers with a per-container writable layer. Layers are cached by digest and shared across images to save disk space.
+- **Daemonless by Default:** `vessel run` executes directly with zero standing control-plane memory. An optional daemon mode is available for API-driven workflows.
+- **Efficient Layered Storage:** OCI layers and blobs are cached by digest and shared across images to save disk space. Unused data can be reclaimed with `vessel gc`.
 - **Cross-Platform Native:**
-    - **Linux:** Uses native kernel namespaces (`unshare`), `chroot`, and `mount` for rootless execution.
-    - **macOS:** Spawns lightweight microVMs using `libkrun` and `virtiofs` for native performance.
+    - **Linux:** Uses native kernel namespaces (`unshare`), `chroot`, `mount`, and `overlayfs` for rootless execution. Outbound networking and `-p` publishing are enabled through `slirp4netns` when available.
+    - **macOS:** Spawns lightweight microVMs using `libkrun` and `virtiofs`, with guest networking and host port forwarding handled inside the microVM.
 - **OCI Compatible:** Pull, unpack, and execute standard images from any public registry (Docker Hub, GHCR, etc.).
 - **Private Registry Ready:** Reuses credentials from standard Docker/Podman auth files so authenticated pulls work after `docker login` or `podman login`.
-- **Networking & Port Forwarding:** Transparent user-space outbound networking and host-to-guest port mapping (`-p`) on both Linux and macOS.
-- **Runtime Flexibility:** Supports environment variable injection (`-e`) and host volume mounting (`-v`) with automated guest-side setup.
-- **Resource Management:** Comprehensive suite of commands for container lifecycle (`run`, `start`, `stop`, `kill`, `rm`) and image management (`rmi`).
-- **Observability:** Integrated logging (`logs`) to inspect stdout/stderr from background containers.
+- **Runtime Flexibility:** Supports environment variable injection (`-e`), host volume mounting (`-v`), and host-to-guest port publishing (`-p`).
+- **Resource Management:** Comprehensive suite of commands for container lifecycle (`run`, `start`, `stop`, `kill`, `rm`, `ps`, `logs`) and image management (`rmi`, `gc`).
+- **Observability:** Integrated logging (`logs`) and table/JSON container listings (`ps --format table|json`).
 - **Compose-Style Projects:** Launch and manage YAML-defined multi-service stacks with `vessel compose`.
+- **Optional Remote Control Plane:** Start `vessel daemon` locally and use `vessel --remote ...` to route CLI operations over the Unix socket API.
 
 ## 🛠 Getting Started
 
 ### Prerequisites
 
-- **Rust:** You will need the latest stable version of the Rust toolchain.
+- **Rust:** Vessel currently targets Rust 1.85 or newer.
 - **macOS:** You must have `libkrun` installed. We recommend using Homebrew:
   ```bash
   brew install slp/krun/libkrun
   ```
-- **Linux:** A kernel supporting user namespaces (standard on most modern distributions).
+- **Linux:** A kernel supporting user namespaces and overlayfs (standard on most modern distributions), plus `unshare` and `chroot` on your `PATH`.
+- **Linux networking:** Install `slirp4netns` if you want outbound networking and host port publishing (`-p`) for rootless containers.
 
 ### Installation
 
@@ -78,6 +79,11 @@ vessel run -p 8080:80 nginx:alpine
 vessel run -v $(pwd):/app alpine -- ls /app
 ```
 
+**List containers as JSON:**
+```bash
+vessel ps --format json
+```
+
 **View logs from a background container:**
 ```bash
 vessel logs <container_id>
@@ -90,6 +96,19 @@ vessel run registry.example.com/team/app:latest
 ```
 
 Vessel checks `VESSEL_REGISTRY_AUTH_FILE`, `REGISTRY_AUTH_FILE`, Docker's `config.json`, and common Podman `auth.json` locations when resolving registry credentials.
+
+**Clean up unused cached layers and blobs:**
+```bash
+vessel gc
+```
+
+**Use the optional daemon-backed control plane:**
+```bash
+vessel daemon start
+vessel --remote ps
+vessel daemon status
+vessel daemon stop
+```
 
 **Start a multi-service project from YAML:**
 ```yaml
@@ -117,14 +136,16 @@ vessel compose logs api
 vessel compose down
 ```
 
-The current compose implementation supports `image`, `command`, `environment`, `volumes`, `ports`, `depends_on`, and an optional top-level `name`. Relative bind mounts are resolved from the compose file's directory.
+Vessel auto-discovers `compose.yaml`, `compose.yml`, `vessel-compose.yaml`, and `vessel-compose.yml`. The current compose implementation supports `image`, `command`, `environment`, `volumes`, `ports`, `depends_on`, and an optional top-level `name`. Relative bind mounts are resolved from the compose file's directory, and you can override discovery with `vessel compose --file <path> --project-name <name> ...`.
 
 ### Lifecycle Management
 
 - `vessel ps`: List all known containers.
 - `vessel stop <id>`: Request a graceful shutdown.
+- `vessel kill <id>`: Forcefully terminate a running container.
 - `vessel rm <id>`: Remove a stopped container's state and logs.
 - `vessel rmi <image>`: Remove a cached image and its root filesystem.
+- `vessel gc`: Remove unused cached layers and blobs.
 
 ## 🤝 Contributing
 
