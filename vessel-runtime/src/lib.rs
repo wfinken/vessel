@@ -27,6 +27,7 @@ pub trait Runtime {
         command_override: Option<Vec<String>>,
         env_override: Option<BTreeMap<String, String>>,
         mount_override: Option<BTreeMap<String, String>>,
+        port_override: Option<BTreeMap<u16, u16>>,
     ) -> Result<RunOutcome, VesselError>;
     fn start(
         &self,

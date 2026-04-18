@@ -46,6 +46,7 @@ pub trait Backend {
         command_override: Option<Vec<String>>,
         env_override: Option<BTreeMap<String, String>>,
         mount_override: Option<BTreeMap<String, String>>,
+        port_override: Option<BTreeMap<u16, u16>>,
     ) -> Result<RunContainerResponse, VesselError>;
     fn start_container(&self, id: &ContainerId) -> Result<ContainerRecord, VesselError>;
     fn stop_container(&self, id: &ContainerId) -> Result<ContainerRecord, VesselError>;
@@ -74,6 +75,7 @@ pub struct RunContainerRequest {
     pub command_override: Option<Vec<String>>,
     pub env_override: Option<BTreeMap<String, String>>,
     pub mount_override: Option<BTreeMap<String, String>>,
+    pub port_override: Option<BTreeMap<u16, u16>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,6 +124,7 @@ impl Backend for LocalBackend {
         command_override: Option<Vec<String>>,
         env_override: Option<BTreeMap<String, String>>,
         mount_override: Option<BTreeMap<String, String>>,
+        port_override: Option<BTreeMap<u16, u16>>,
     ) -> Result<RunContainerResponse, VesselError> {
         let runtime = self.runtime();
         let report = runtime.capability_report();
@@ -136,6 +139,7 @@ impl Backend for LocalBackend {
             command_override,
             env_override,
             mount_override,
+            port_override,
         )?;
         Ok(RunContainerResponse { record, exit_code })
     }
@@ -267,6 +271,7 @@ impl Backend for RemoteBackend {
         command_override: Option<Vec<String>>,
         env_override: Option<BTreeMap<String, String>>,
         mount_override: Option<BTreeMap<String, String>>,
+        port_override: Option<BTreeMap<u16, u16>>,
     ) -> Result<RunContainerResponse, VesselError> {
         let body = RunContainerRequest {
             image: image.to_string(),
@@ -274,6 +279,7 @@ impl Backend for RemoteBackend {
             command_override,
             env_override,
             mount_override,
+            port_override,
         };
         self.execute_json(
             "POST",
@@ -432,6 +438,7 @@ async fn run_container(
             request.command_override,
             request.env_override,
             request.mount_override,
+            request.port_override,
         )
         .map(Json)
         .map_err(ApiError)

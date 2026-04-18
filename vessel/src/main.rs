@@ -47,6 +47,7 @@ struct RunArgs {
     detach: bool,
     env: Vec<String>,
     mounts: Vec<String>,
+    ports: Vec<String>,
     image: String,
     command: Vec<String>,
 }
@@ -166,6 +167,26 @@ fn run(args: GlobalArgs) -> Result<i32, VesselError> {
             }
             let mount_override = (!mount_override.is_empty()).then_some(mount_override);
 
+            let mut port_override = BTreeMap::new();
+            for entry in args.ports {
+                if let Some((host, guest)) = entry.split_once(':') {
+                    if let (Ok(host_port), Ok(guest_port)) =
+                        (host.parse::<u16>(), guest.parse::<u16>())
+                    {
+                        port_override.insert(host_port, guest_port);
+                    } else {
+                        return Err(VesselError::Usage(format!(
+                            "invalid port mapping `{entry}`; expected host_port:guest_port with valid port numbers"
+                        )));
+                    }
+                } else {
+                    return Err(VesselError::Usage(format!(
+                        "invalid port mapping `{entry}`; expected host_port:guest_port"
+                    )));
+                }
+            }
+            let port_override = (!port_override.is_empty()).then_some(port_override);
+
             let command_override = (!args.command.is_empty()).then_some(args.command);
             let outcome = backend.run_container(
                 &image,
@@ -173,6 +194,7 @@ fn run(args: GlobalArgs) -> Result<i32, VesselError> {
                 command_override,
                 env_override,
                 mount_override,
+                port_override,
             )?;
             if args.detach {
                 println!("{}", outcome.record.id());
@@ -459,8 +481,15 @@ fn run_compose_service(
     let image: ImageRef = spec.image.parse()?;
     let env_override = (!spec.environment.is_empty()).then_some(spec.environment.clone());
     let mount_override = (!spec.mounts.is_empty()).then_some(spec.mounts.clone());
-    let outcome =
-        backend.run_container(&image, true, spec.command.clone(), env_override, mount_override)?;
+    let port_override = (!spec.ports.is_empty()).then_some(spec.ports.clone());
+    let outcome = backend.run_container(
+        &image,
+        true,
+        spec.command.clone(),
+        env_override,
+        mount_override,
+        port_override,
+    )?;
     Ok(outcome.record.id().clone())
 }
 
@@ -836,9 +865,10 @@ fn cli() -> OptionParser<GlobalArgs> {
     let detach = long("detach").short('d').switch();
     let env = long("env").short('e').argument::<String>("ENV").many();
     let mounts = long("volume").short('v').argument::<String>("VOLUME").many();
+    let ports = long("publish").short('p').argument::<String>("PORT").many();
     let image = positional::<String>("IMAGE");
     let command = positional::<String>("COMMAND").many();
-    let run = construct!(RunArgs { detach, env, mounts, image, command })
+    let run = construct!(RunArgs { detach, env, mounts, ports, image, command })
         .to_options()
         .descr("Pull, create, and start a container")
         .command("run")

@@ -52,6 +52,7 @@ impl Runtime for UnsupportedRuntime {
         _command_override: Option<Vec<String>>,
         _env_override: Option<BTreeMap<String, String>>,
         _mount_override: Option<BTreeMap<String, String>>,
+        _port_override: Option<BTreeMap<u16, u16>>,
     ) -> Result<RunOutcome, VesselError> {
         Err(VesselError::UnsupportedPlatform(self.reason()))
     }

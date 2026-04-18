@@ -35,6 +35,7 @@ impl LinuxRuntime {
             unshare: find_in_path("unshare").ok_or_else(|| {
                 VesselError::Capability("missing required tool `unshare`".to_string())
             })?,
+            slirp4netns: find_in_path("slirp4netns"),
         })
     }
 
@@ -68,6 +69,10 @@ impl LinuxRuntime {
             .arg("--kill-child")
             .arg("--mount-proc");
 
+        if tools.slirp4netns.is_some() {
+            command.arg("--net");
+        }
+
         let (exec_path, args) = build_linux_overlay_wrapper(&record, &tools, &bundle_dir);
         command.arg(exec_path).args(args);
 
@@ -93,6 +98,31 @@ impl LinuxRuntime {
         }
 
         let mut child = command.spawn().map_err(map_spawn_error)?;
+
+        if let Some(slirp_path) = &tools.slirp4netns {
+            let pid = child.id();
+            let mut slirp_cmd = Command::new(slirp_path);
+            slirp_cmd
+                .arg("--configure")
+                .arg("--mtu")
+                .arg("65520")
+                .arg(pid.to_string())
+                .arg("tap0");
+
+            for (host_port, guest_port) in &record.ports {
+                slirp_cmd.arg("-p").arg(format!("{host_port}:{guest_port}"));
+            }
+
+            slirp_cmd
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+
+            slirp_cmd.spawn().map_err(|source| {
+                VesselError::Runtime(format!("failed to start slirp4netns: {source}"))
+            })?;
+        }
+
         record.status = ContainerStatus::Running;
         record.pid = Some(child.id());
         record.started_at = Some(now_timestamp());
@@ -137,6 +167,10 @@ fn build_linux_overlay_wrapper(
         work_dir.display(),
         merged_dir.display()
     ));
+
+    if tools.slirp4netns.is_some() {
+        script.push_str("if command -v ip >/dev/null; then ip link set lo up || true; fi; ");
+    }
 
     // 2. Mount additional volumes into the merged root
     for (host_path, guest_path) in &record.mounts {
@@ -203,6 +237,7 @@ impl Runtime for LinuxRuntime {
         command_override: Option<Vec<String>>,
         env_override: Option<BTreeMap<String, String>>,
         mount_override: Option<BTreeMap<String, String>>,
+        port_override: Option<BTreeMap<u16, u16>>,
     ) -> Result<RunOutcome, VesselError> {
         let image_store = ImageStore::new(self.paths.clone());
         let image = image_store.pull(image)?;
@@ -221,6 +256,7 @@ impl Runtime for LinuxRuntime {
             image.runtime.working_dir.clone(),
             environment,
             mount_override.unwrap_or_default(),
+            port_override.unwrap_or_default(),
             image.layers.clone(),
         );
         store.save(&record)?;
@@ -303,6 +339,7 @@ impl Runtime for LinuxRuntime {
 struct ToolPaths {
     chroot: PathBuf,
     unshare: PathBuf,
+    slirp4netns: Option<PathBuf>,
 }
 
 fn find_in_path(binary: &str) -> Option<PathBuf> {

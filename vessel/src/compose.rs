@@ -21,6 +21,7 @@ pub struct ComposeServiceSpec {
     pub command: Option<Vec<String>>,
     pub environment: BTreeMap<String, String>,
     pub mounts: BTreeMap<String, String>,
+    pub ports: BTreeMap<u16, u16>,
     pub depends_on: Vec<String>,
 }
 
@@ -52,6 +53,8 @@ struct ComposeService {
     environment: ComposeEnvironment,
     #[serde(default)]
     volumes: Vec<String>,
+    #[serde(default)]
+    ports: Vec<String>,
     #[serde(default)]
     depends_on: Vec<String>,
 }
@@ -173,6 +176,22 @@ pub fn load_project(
             mounts.insert(host_path.to_string_lossy().to_string(), guest.to_string());
         }
 
+        let mut ports = BTreeMap::new();
+        for entry in service.ports {
+            let (host, guest) = entry.split_once(':').ok_or_else(|| {
+                VesselError::Usage(format!(
+                    "service `{service_name}` has invalid port mapping `{entry}`; expected host_port:guest_port"
+                ))
+            })?;
+            if let (Ok(host_port), Ok(guest_port)) = (host.parse::<u16>(), guest.parse::<u16>()) {
+                ports.insert(host_port, guest_port);
+            } else {
+                return Err(VesselError::Usage(format!(
+                    "service `{service_name}` has invalid port mapping `{entry}`; expected host_port:guest_port with valid port numbers"
+                )));
+            }
+        }
+
         services.insert(
             service_name.clone(),
             ComposeServiceSpec {
@@ -180,6 +199,7 @@ pub fn load_project(
                 command: service.command.map(ComposeCommand::into_argv).transpose()?,
                 environment: service.environment.into_map()?,
                 mounts,
+                ports,
                 depends_on: service.depends_on,
             },
         );

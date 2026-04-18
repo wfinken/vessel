@@ -13,6 +13,7 @@ Unlike traditional container runtimes that rely on a persistent background servi
     - **macOS:** Spawns lightweight microVMs using `libkrun` and `virtiofs` for native performance.
 - **OCI Compatible:** Pull, unpack, and execute standard images from any public registry (Docker Hub, GHCR, etc.).
 - **Private Registry Ready:** Reuses credentials from standard Docker/Podman auth files so authenticated pulls work after `docker login` or `podman login`.
+- **Networking & Port Forwarding:** Transparent user-space outbound networking and host-to-guest port mapping (`-p`) on both Linux and macOS.
 - **Runtime Flexibility:** Supports environment variable injection (`-e`) and host volume mounting (`-v`) with automated guest-side setup.
 - **Resource Management:** Comprehensive suite of commands for container lifecycle (`run`, `start`, `stop`, `kill`, `rm`) and image management (`rmi`).
 - **Observability:** Integrated logging (`logs`) to inspect stdout/stderr from background containers.
@@ -67,6 +68,11 @@ vessel run alpine -- echo "Hello from Vessel"
 vessel run -d -e DB_HOST=localhost -e DB_PORT=5432 postgres:latest
 ```
 
+**Publish a port to the host:**
+```bash
+vessel run -p 8080:80 nginx:alpine
+```
+
 **Mount a host directory into the container:**
 ```bash
 vessel run -v $(pwd):/app alpine -- ls /app
@@ -98,6 +104,8 @@ services:
     command: ["./bin/api"]
     volumes:
       - ./app:/workspace
+    ports:
+      - 8080:80
     depends_on:
       - db
 ```
@@ -109,7 +117,7 @@ vessel compose logs api
 vessel compose down
 ```
 
-The current compose implementation supports `image`, `command`, `environment`, `volumes`, `depends_on`, and an optional top-level `name`. Relative bind mounts are resolved from the compose file's directory.
+The current compose implementation supports `image`, `command`, `environment`, `volumes`, `ports`, `depends_on`, and an optional top-level `name`. Relative bind mounts are resolved from the compose file's directory.
 
 ### Lifecycle Management
 

@@ -149,6 +149,7 @@ impl Runtime for MacOsRuntime {
         command_override: Option<Vec<String>>,
         env_override: Option<BTreeMap<String, String>>,
         mount_override: Option<BTreeMap<String, String>>,
+        port_override: Option<BTreeMap<u16, u16>>,
     ) -> Result<RunOutcome, VesselError> {
         self.ensure_libkrun()?;
         let image_store = ImageStore::new(self.paths.clone());
@@ -168,6 +169,7 @@ impl Runtime for MacOsRuntime {
             pulled.runtime.working_dir.clone(),
             environment,
             mount_override.unwrap_or_default(),
+            port_override.unwrap_or_default(),
             pulled.layers.clone(),
         );
         store.save(&record)?;
@@ -259,6 +261,12 @@ pub fn run_macos_helper(paths: VesselPaths, id: &ContainerId) -> Result<i32, Ves
     let _ctx_guard = KrunContextGuard { api: &api, ctx };
 
     api.set_vm_config(ctx, 4, 4096)?;
+
+    // Configure networking.
+    api.set_network(ctx, "10.0.0.2", "255.255.255.0", "10.0.0.1")?;
+    for (&host_port, &guest_port) in &record.ports {
+        api.add_port_forward(ctx, "0.0.0.0", host_port, guest_port)?;
+    }
 
     // We need a writable layer and a workdir for overlayfs.
     // These will be stored in the bundle directory.
@@ -399,6 +407,8 @@ struct KrunApi {
         *const *const c_char,
         *const *const c_char,
     ) -> c_int,
+    set_network: unsafe extern "C" fn(c_uint, *const c_char, *const c_char, *const c_char) -> c_int,
+    add_port_forward: unsafe extern "C" fn(c_uint, *const c_char, u16, u16) -> c_int,
     add_virtiofs: unsafe extern "C" fn(c_uint, *const c_char, *const c_char) -> c_int,
     set_console_output: unsafe extern "C" fn(c_uint, *const c_char) -> c_int,
     start_enter: unsafe extern "C" fn(c_uint) -> c_int,
@@ -461,6 +471,14 @@ impl KrunApi {
                         *const *const c_char,
                         *const *const c_char,
                     ) -> c_int
+                ),
+                set_network: load_symbol!(
+                    b"krun_set_network\0",
+                    unsafe extern "C" fn(c_uint, *const c_char, *const c_char, *const c_char) -> c_int
+                ),
+                add_port_forward: load_symbol!(
+                    b"krun_add_port_forward\0",
+                    unsafe extern "C" fn(c_uint, *const c_char, u16, u16) -> c_int
                 ),
                 add_virtiofs: load_symbol!(
                     b"krun_add_virtiofs\0",
@@ -536,6 +554,34 @@ impl KrunApi {
         self.call(
             unsafe { (self.set_exec)(ctx, exec_path.as_ptr(), argv.as_ptr(), envp.as_ptr()) },
             "krun_set_exec",
+        )
+    }
+
+    fn set_network(&self, ctx: u32, ip: &str, mask: &str, gw: &str) -> Result<(), VesselError> {
+        let ip = CString::new(ip)
+            .map_err(|_| VesselError::Runtime("IP address contained a NUL byte".to_string()))?;
+        let mask = CString::new(mask)
+            .map_err(|_| VesselError::Runtime("network mask contained a NUL byte".to_string()))?;
+        let gw = CString::new(gw)
+            .map_err(|_| VesselError::Runtime("gateway address contained a NUL byte".to_string()))?;
+        self.call(
+            unsafe { (self.set_network)(ctx, ip.as_ptr(), mask.as_ptr(), gw.as_ptr()) },
+            "krun_set_network",
+        )
+    }
+
+    fn add_port_forward(
+        &self,
+        ctx: u32,
+        host_addr: &str,
+        host_port: u16,
+        guest_port: u16,
+    ) -> Result<(), VesselError> {
+        let host_addr = CString::new(host_addr)
+            .map_err(|_| VesselError::Runtime("host address contained a NUL byte".to_string()))?;
+        self.call(
+            unsafe { (self.add_port_forward)(ctx, host_addr.as_ptr(), host_port, guest_port) },
+            "krun_add_port_forward",
         )
     }
 

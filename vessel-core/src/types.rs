@@ -51,6 +51,8 @@ pub struct ContainerRecord {
     #[serde(default)]
     pub mounts: BTreeMap<String, String>,
     #[serde(default)]
+    pub ports: BTreeMap<u16, u16>,
+    #[serde(default)]
     pub workdir: Option<String>,
     #[serde(default, deserialize_with = "deserialize_layers", alias = "rootfs")]
     pub layers: Vec<PathBuf>,
@@ -117,6 +119,7 @@ impl ContainerRecord {
         workdir: Option<String>,
         environment: BTreeMap<String, String>,
         mounts: BTreeMap<String, String>,
+        ports: BTreeMap<u16, u16>,
         layers: Vec<PathBuf>,
     ) -> Self {
         Self {
@@ -130,6 +133,7 @@ impl ContainerRecord {
             command,
             environment,
             mounts,
+            ports,
             workdir,
             layers,
         }
