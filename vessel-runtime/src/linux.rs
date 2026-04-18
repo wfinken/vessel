@@ -463,6 +463,7 @@ mod tests {
             image.runtime.working_dir.clone(),
             image.runtime.env.clone(),
             BTreeMap::new(),
+            BTreeMap::new(),
             image.layers.clone(),
         );
         store.save(&record).expect("save record");
