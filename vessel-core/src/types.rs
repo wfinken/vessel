@@ -112,6 +112,7 @@ impl FromStr for ContainerId {
 }
 
 impl ContainerRecord {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ContainerId,
         image: crate::ImageRef,

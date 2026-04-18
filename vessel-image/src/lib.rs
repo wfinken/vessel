@@ -1179,6 +1179,7 @@ mod tests {
             None,
             BTreeMap::new(),
             BTreeMap::new(),
+            BTreeMap::new(),
             vec![container_layer.clone()],
         );
         container_store.save(&record).expect("save");
