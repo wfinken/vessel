@@ -254,6 +254,9 @@ pub fn run_macos_helper(paths: VesselPaths, id: &ContainerId) -> Result<i32, Ves
         VesselError::Capability("libkrun was not found for the macOS helper process".to_string())
     })?;
     let kernel_path = discover_kernel_path();
+    if kernel_path.is_none() {
+        ensure_libkrunfw_loadable(&lib_path)?;
+    }
     let api = KrunApi::load(&lib_path)?;
     api.init_log()?;
     raise_nofile_limit()?;
@@ -262,11 +265,9 @@ pub fn run_macos_helper(paths: VesselPaths, id: &ContainerId) -> Result<i32, Ves
 
     api.set_vm_config(ctx, 4, 4096)?;
 
-    // Configure networking.
-    api.set_network(ctx, "10.0.0.2", "255.255.255.0", "10.0.0.1")?;
-    for (&host_port, &guest_port) in &record.ports {
-        api.add_port_forward(ctx, "0.0.0.0", host_port, guest_port)?;
-    }
+    // libkrun 1.18+ enables the TSI backend automatically when no virtio-net device is added,
+    // so the previous krun_set_network call is no longer needed (and the symbol was removed).
+    api.set_port_map(ctx, &record.ports)?;
 
     // We need a writable layer and a workdir for overlayfs.
     // These will be stored in the bundle directory.
@@ -302,7 +303,7 @@ pub fn run_macos_helper(paths: VesselPaths, id: &ContainerId) -> Result<i32, Ves
         api.add_virtiofs(ctx, &tag, Path::new(host_path))?;
     }
 
-    let (exec_path, argv) = build_macos_overlay_wrapper(&record)?;
+    let (exec_path, argv) = build_macos_overlay_wrapper(&record, &bundle_dir)?;
 
     api.set_exec(ctx, exec_path, &argv, &record.environment)?;
     api.split_irqchip(ctx, false)?;
@@ -336,47 +337,66 @@ fn command_argv(command: &[String]) -> Vec<String> {
 
 fn build_macos_overlay_wrapper(
     record: &ContainerRecord,
+    bundle_dir: &Path,
 ) -> Result<(String, Vec<String>), VesselError> {
-    let mut script = String::from("set -e; ");
+    let mut script = String::from("set -e\n");
 
-    // 1. Mount all layers and the bundle dir
-    script.push_str("mkdir -p /vessel/bundle /vessel/merged; ");
-    script.push_str("mount -t virtiofs bundle /vessel/bundle; ");
+    script.push_str("mkdir -p /vessel/merged\n");
 
     let mut lower_dirs = Vec::new();
     for (index, _) in record.layers.iter().enumerate() {
         let tag = format!("layer{index}");
         let mount_point = format!("/vessel/layer{index}");
-        script
-            .push_str(&format!("mkdir -p {mount_point}; mount -t virtiofs {tag} {mount_point}; "));
+        script.push_str(&format!("mkdir -p {mount_point}\nmount -t virtiofs {tag} {mount_point}\n"));
         lower_dirs.push(mount_point);
     }
 
-    // 2. Mount overlayfs
-    // Lowerdirs should be in order from top to bottom. Our layers list is already ordered this way.
+    // Overlay scratch space lives on tmpfs, not on the bundle's virtiofs share. virtiofs
+    // does not implement the xattr / trusted-namespace operations overlayfs needs, so
+    // writes through the upper layer surface as ECONNRESET inside the guest.
     let lower_str = lower_dirs.join(":");
     script.push_str(&format!(
-        "mkdir -p /vessel/bundle/upper /vessel/bundle/work; \
-         mount -t overlay overlay -o lowerdir={},upperdir=/vessel/bundle/upper,workdir=/vessel/bundle/work /vessel/merged; ",
-        lower_str
+        "mkdir -p /vessel/overlay\n\
+         mount -t tmpfs tmpfs /vessel/overlay\n\
+         mkdir -p /vessel/overlay/upper /vessel/overlay/work\n\
+         mount -t overlay overlay -o lowerdir={lower_str},upperdir=/vessel/overlay/upper,workdir=/vessel/overlay/work /vessel/merged\n"
     ));
 
-    // 3. Mount additional volumes into the merged root
+    // Pseudo filesystems the container runtime expects inside the merged rootfs.
+    script.push_str(
+        "mkdir -p /vessel/merged/proc /vessel/merged/sys /vessel/merged/dev /vessel/merged/tmp /vessel/merged/run\n\
+         mount -t proc proc /vessel/merged/proc\n\
+         mount -t sysfs sys /vessel/merged/sys\n\
+         mount --rbind /dev /vessel/merged/dev\n\
+         mount -t tmpfs tmpfs /vessel/merged/tmp\n\
+         mount -t tmpfs tmpfs /vessel/merged/run\n",
+    );
+
     for (index, (_, guest_path)) in record.mounts.iter().enumerate() {
         let tag = format!("mount{index}");
         let absolute_guest_path = format!("/vessel/merged/{}", guest_path.trim_start_matches('/'));
-        script.push_str(&format!("mkdir -p \"{absolute_guest_path}\"; mount -t virtiofs \"{tag}\" \"{absolute_guest_path}\"; "));
+        script.push_str(&format!(
+            "mkdir -p \"{absolute_guest_path}\"\nmount -t virtiofs \"{tag}\" \"{absolute_guest_path}\"\n"
+        ));
     }
 
-    // 4. chroot and exec
     let workdir = record.workdir.as_deref().unwrap_or("/");
-    script.push_str(&format!("cd /vessel/merged{}; ", workdir));
-    script.push_str("exec chroot /vessel/merged \"$0\" \"$@\"");
+    script.push_str(&format!("cd /vessel/merged{workdir}\n"));
+    script.push_str("exec chroot /vessel/merged \"$@\"\n");
 
-    let mut argv = vec![String::from("-c"), script];
+    let init_path = bundle_dir.join("init.sh");
+    fs::write(&init_path, &script).map_err(|source| VesselError::io(&init_path, source))?;
+
+    // The kernel command line on aarch64 is capped at 2048 bytes, and libkrun appends
+    // the entire argv to it. Keep what we hand to set_exec tiny: mount the bundle and
+    // delegate to the init script written above.
+    let bootstrap = String::from(
+        "mkdir -p /vessel/bundle && mount -t virtiofs bundle /vessel/bundle && \
+         exec /bin/sh /vessel/bundle/init.sh \"$@\"",
+    );
+    let mut argv = vec![String::from("-c"), bootstrap, String::from("vessel-init")];
     argv.extend(record.command.iter().cloned());
 
-    // We rely on the base root having /bin/sh
     Ok((String::from("/bin/sh"), argv))
 }
 
@@ -407,8 +427,7 @@ struct KrunApi {
         *const *const c_char,
         *const *const c_char,
     ) -> c_int,
-    set_network: unsafe extern "C" fn(c_uint, *const c_char, *const c_char, *const c_char) -> c_int,
-    add_port_forward: unsafe extern "C" fn(c_uint, *const c_char, u16, u16) -> c_int,
+    set_port_map: unsafe extern "C" fn(c_uint, *const *const c_char) -> c_int,
     add_virtiofs: unsafe extern "C" fn(c_uint, *const c_char, *const c_char) -> c_int,
     set_console_output: unsafe extern "C" fn(c_uint, *const c_char) -> c_int,
     start_enter: unsafe extern "C" fn(c_uint) -> c_int,
@@ -472,18 +491,9 @@ impl KrunApi {
                         *const *const c_char,
                     ) -> c_int
                 ),
-                set_network: load_symbol!(
-                    b"krun_set_network\0",
-                    unsafe extern "C" fn(
-                        c_uint,
-                        *const c_char,
-                        *const c_char,
-                        *const c_char,
-                    ) -> c_int
-                ),
-                add_port_forward: load_symbol!(
-                    b"krun_add_port_forward\0",
-                    unsafe extern "C" fn(c_uint, *const c_char, u16, u16) -> c_int
+                set_port_map: load_symbol!(
+                    b"krun_set_port_map\0",
+                    unsafe extern "C" fn(c_uint, *const *const c_char) -> c_int
                 ),
                 add_virtiofs: load_symbol!(
                     b"krun_add_virtiofs\0",
@@ -562,33 +572,10 @@ impl KrunApi {
         )
     }
 
-    fn set_network(&self, ctx: u32, ip: &str, mask: &str, gw: &str) -> Result<(), VesselError> {
-        let ip = CString::new(ip)
-            .map_err(|_| VesselError::Runtime("IP address contained a NUL byte".to_string()))?;
-        let mask = CString::new(mask)
-            .map_err(|_| VesselError::Runtime("network mask contained a NUL byte".to_string()))?;
-        let gw = CString::new(gw).map_err(|_| {
-            VesselError::Runtime("gateway address contained a NUL byte".to_string())
-        })?;
-        self.call(
-            unsafe { (self.set_network)(ctx, ip.as_ptr(), mask.as_ptr(), gw.as_ptr()) },
-            "krun_set_network",
-        )
-    }
-
-    fn add_port_forward(
-        &self,
-        ctx: u32,
-        host_addr: &str,
-        host_port: u16,
-        guest_port: u16,
-    ) -> Result<(), VesselError> {
-        let host_addr = CString::new(host_addr)
-            .map_err(|_| VesselError::Runtime("host address contained a NUL byte".to_string()))?;
-        self.call(
-            unsafe { (self.add_port_forward)(ctx, host_addr.as_ptr(), host_port, guest_port) },
-            "krun_add_port_forward",
-        )
+    fn set_port_map(&self, ctx: u32, ports: &BTreeMap<u16, u16>) -> Result<(), VesselError> {
+        let entries =
+            CStringArray::new(ports.iter().map(|(host, guest)| format!("{host}:{guest}")))?;
+        self.call(unsafe { (self.set_port_map)(ctx, entries.as_ptr()) }, "krun_set_port_map")
     }
 
     fn add_virtiofs(&self, ctx: u32, tag: &str, host_path: &Path) -> Result<(), VesselError> {
@@ -661,6 +648,37 @@ fn discover_libkrun_path() -> Option<PathBuf> {
     }
 
     DEFAULT_LIBKRUN_PATHS.iter().map(PathBuf::from).find(|path| path.is_file())
+}
+
+const LIBKRUNFW_DYLIB: &str = "libkrunfw.5.dylib";
+
+fn ensure_libkrunfw_loadable(libkrun_path: &Path) -> Result<(), VesselError> {
+    if unsafe { Library::new(LIBKRUNFW_DYLIB) }.is_ok() {
+        return Ok(());
+    }
+
+    let mut search_dirs: Vec<PathBuf> = Vec::new();
+    if let Some(parent) = libkrun_path.parent() {
+        search_dirs.push(parent.to_path_buf());
+    }
+    if let Some(prefix) = infer_homebrew_prefix(libkrun_path) {
+        search_dirs.push(prefix.join("lib"));
+        search_dirs.push(prefix.join("opt/libkrunfw/lib"));
+    }
+
+    let on_disk = search_dirs.iter().map(|dir| dir.join(LIBKRUNFW_DYLIB)).find(|path| path.is_file());
+
+    Err(VesselError::Capability(match on_disk {
+        Some(path) => format!(
+            "libkrunfw is installed at {} but libkrun could not load it by name. \
+             Confirm that DYLD_LIBRARY_PATH reaches this process (it is stripped by hardened-runtime parents) \
+             or set VESSEL_LIBKRUN_KERNEL_PATH to a kernel image.",
+            path.display()
+        ),
+        None => "libkrunfw was not found. libkrun on macOS loads the guest kernel from libkrunfw.5.dylib at runtime. \
+             Install it with: brew install slp/krun/libkrunfw"
+            .to_string(),
+    }))
 }
 
 fn discover_kernel_path() -> Option<PathBuf> {
