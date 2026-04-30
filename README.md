@@ -24,9 +24,9 @@ Unlike traditional runtimes that require a persistent service, Vessel can execut
 ### Prerequisites
 
 - **Rust:** Vessel currently targets Rust 1.85 or newer.
-- **macOS:** You must have `libkrun` installed. We recommend using Homebrew:
+- **macOS:** You must have `libkrun` and `libkrunfw` installed. `libkrunfw` ships the Linux kernel that libkrun loads at runtime; without it, vessel exits with `MissingKernelConfig`. We recommend using Homebrew:
   ```bash
-  brew install slp/krun/libkrun
+  brew install slp/krun/libkrun slp/krun/libkrunfw
   ```
 - **Linux:** A kernel supporting user namespaces and overlayfs (standard on most modern distributions), plus `unshare` and `chroot` on your `PATH`.
 - **Linux networking:** Install `slirp4netns` if you want outbound networking and host port publishing (`-p`) for rootless containers.

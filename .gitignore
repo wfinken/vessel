@@ -2,9 +2,24 @@
 Cargo.lock
 .DS_Store
 
+# Claude Code worktrees and session data
+.claude/
+
+# Vendor source caches (e.g. cloned third-party trees for inspection)
+.vendor/
+
+# Local Vessel data/state directories used during development and benchmarks
 .bench-vessel-data/
 .bench-vessel-state/
+.tmp-vessel-data/
+.tmp-vessel-state/
 .vessel-data/
 .vessel-data-standalone/
 .vessel-state/
 .vessel-state-standalone/
+
+# Bind-mount target used by README minecraft example
+/mc-data/
+
+# Ad-hoc patch dumps
+/patch.diff
